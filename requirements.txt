@@ -1,0 +1,14 @@
+# Core scientific computing and data analysis
+numpy
+pandas
+scikit-learn
+
+# Parallel, distributed and accelerated computing (PRiR)
+numba
+mpi4py
+
+# Visualization
+matplotlib
+
+# Testing and development
+pytest
