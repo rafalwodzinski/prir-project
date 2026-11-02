@@ -54,6 +54,13 @@ def test_bce_loss_stability_with_zeros_and_ones():
     assert loss_zeros > 0.0
     assert loss_ones > 0.0
 
+    # To samo dla float32 (gdzie 1.0 - 1e-15 zaokragliloby sie do 1.0 bez dostosowania eps)
+    y_true_f32 = y_true.astype(np.float32)
+    loss_zeros_f32 = compute_bce_loss(y_true_f32, y_pred_zeros.astype(np.float32))
+    loss_ones_f32 = compute_bce_loss(y_true_f32, y_pred_ones.astype(np.float32))
+    assert not np.isnan(loss_zeros_f32)
+    assert not np.isnan(loss_ones_f32)
+
 
 def test_bce_loss_perfect_prediction():
     """Dla idealnych predykcji strata powinna byc bliska 0."""

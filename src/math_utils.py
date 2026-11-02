@@ -22,14 +22,22 @@ def sigmoid(z: NDArray[Any]) -> NDArray[Any]:
 def compute_bce_loss(
     y_true: NDArray[Any],
     y_pred: NDArray[Any],
-    eps: float = 1e-15,
+    eps: float = 1e-7,
 ) -> float:
     """
     Binary Cross-Entropy (BCE) loss.
     Obcinamy y_pred do [eps, 1 - eps], zeby nie liczyc log(0) co daloby nan.
+    Dla float32 precyzja maszynowa to ~1.19e-7, dlatego bezpieczny eps to 1e-7
+    (dla 1e-15 wartosc 1.0 - eps w float32 zaokragla sie z powrotem do 1.0).
     """
+    # Dla float32 wymuszamy co najmniej 1e-7, zeby 1.0 - eps < 1.0
+    if np.issubdtype(y_pred.dtype, np.floating) and y_pred.dtype == np.float32:
+        effective_eps = max(eps, 1e-7)
+    else:
+        effective_eps = eps
+
     # Zabezpieczenie przed log(0)
-    y_pred_safe = np.clip(y_pred, eps, 1.0 - eps)
+    y_pred_safe = np.clip(y_pred, effective_eps, 1.0 - effective_eps)
 
     loss = -np.mean(
         y_true * np.log(y_pred_safe) + (1.0 - y_true) * np.log(1.0 - y_pred_safe)
