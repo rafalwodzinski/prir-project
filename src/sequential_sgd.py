@@ -61,6 +61,7 @@ def train_sequential_sgd(
         "accuracy": [],
         "val_loss": [],
         "val_accuracy": [],
+        "epoch_times": [],
     }
 
     for epoch in range(1, epochs + 1):
@@ -95,6 +96,7 @@ def train_sequential_sgd(
         history["accuracy"].append(epoch_acc)
 
         elapsed = time.perf_counter() - t0
+        history["epoch_times"].append(elapsed)
 
         if X_val is not None and y_val is not None:
             val_probs = predict_proba(X_val, weights)
