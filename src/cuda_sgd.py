@@ -27,22 +27,23 @@ def compute_errors_cuda_kernel(
     d_y: Any,
     d_weights: Any,
     d_errors: Any,
+    d_indices: Any,
     batch_start: int,
     batch_size: int,
     n_features: int,
 ) -> None:
     """
     Rownolegle liczenie predykcji i bledow na GPU.
-    Kazdy watek liczy jedna probke z mini-batcha.
+    Kazdy watek liczy jedna probke z mini-batcha z uzyciem przetasowanego indeksu wiersza.
     """
     i = cuda.grid(1)
 
     if i < batch_size:
-        global_row = batch_start + i
+        row = d_indices[batch_start + i]
 
         z = 0.0
         for j in range(n_features):
-            z += d_X[global_row, j] * d_weights[j]
+            z += d_X[row, j] * d_weights[j]
 
         # Ochrona przed overflowem
         if z < -85.0:
@@ -53,7 +54,7 @@ def compute_errors_cuda_kernel(
             z_safe = z
 
         pred = 1.0 / (1.0 + math.exp(-z_safe))
-        d_errors[i] = pred - d_y[global_row]
+        d_errors[i] = pred - d_y[row]
 
 
 @cuda.jit
@@ -61,19 +62,21 @@ def compute_gradient_cuda_kernel(
     d_X: Any,
     d_errors: Any,
     d_grad: Any,
+    d_indices: Any,
     batch_start: int,
     batch_size: int,
     n_features: int,
 ) -> None:
     """
-    Rownolegle liczenie gradientu dla kazdej cechy j.
+    Rownolegle liczenie gradientu dla kazdej cechy j z uzyciem przetasowanych indeksow.
     """
     j = cuda.grid(1)
 
     if j < n_features:
         acc = 0.0
         for i in range(batch_size):
-            acc += d_errors[i] * d_X[batch_start + i, j]
+            row = d_indices[batch_start + i]
+            acc += d_errors[i] * d_X[row, j]
         d_grad[j] = acc / batch_size
 
 
@@ -119,6 +122,7 @@ def train_cuda_sgd(
     d_weights = cuda.to_device(weights_init)
     d_errors = cuda.device_array(batch_size, dtype=np.float32)
     d_grad = cuda.device_array(n_features, dtype=np.float32)
+    d_indices = cuda.device_array(n_samples, dtype=np.int32)
 
     transfer_init_time = time.perf_counter() - t_transfer_start
     if verbose:
@@ -140,8 +144,9 @@ def train_cuda_sgd(
     for epoch in range(1, epochs + 1):
         t0 = time.perf_counter()
 
-        # Tasowanie indeksow
-        indices = rng.permutation(n_samples)
+        # Tasowanie indeksow i przeslanie lekkiej tablicy int32 do GPU
+        indices = rng.permutation(n_samples).astype(np.int32)
+        d_indices.copy_to_device(indices)
 
         for start_idx in range(0, n_samples, batch_size):
             end_idx = min(start_idx + batch_size, n_samples)
@@ -152,13 +157,13 @@ def train_cuda_sgd(
 
             current_blocks_errors = (current_bs + threads_per_block - 1) // threads_per_block
 
-            # Odpalamy kernele bez zadnego kopiowania danych miedzy CPU a GPU
+            # Odpalamy kernele bez zadnego kopiowania danych macierzy X miedzy CPU a GPU
             compute_errors_cuda_kernel[current_blocks_errors, threads_per_block](
-                d_X, d_y, d_weights, d_errors, start_idx, current_bs, n_features
+                d_X, d_y, d_weights, d_errors, d_indices, start_idx, current_bs, n_features
             )
 
             compute_gradient_cuda_kernel[blocks_features, threads_per_block](
-                d_X, d_errors, d_grad, start_idx, current_bs, n_features
+                d_X, d_errors, d_grad, d_indices, start_idx, current_bs, n_features
             )
 
             update_weights_cuda_kernel[blocks_features, threads_per_block](
