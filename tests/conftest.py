@@ -14,3 +14,4 @@ if "NUMBA_ENABLE_CUDASIM" not in os.environ:
             ctypes.CDLL(lib_name)
         except Exception:
             os.environ["NUMBA_ENABLE_CUDASIM"] = "1"
+
