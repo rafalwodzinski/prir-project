@@ -156,3 +156,4 @@ def test_cli_end_to_end_execution(tmp_path: Path):
     assert history["target_accuracy"] == 0.74
     assert history["epoch_to_target_accuracy"] is not None
     assert history["time_to_target_accuracy"] is not None
+
