@@ -2,9 +2,16 @@ import os
 import numpy as np
 import pytest
 
-# Wymuszamy symulator CUDASIM na potrzeby testow lokalnych, jesli brak fizycznej karty NVIDIA
-os.environ["NUMBA_ENABLE_CUDASIM"] = "1"
-from numba import cuda
+try:
+    from numba import cuda
+    cuda_available = cuda.is_available()
+except Exception:
+    cuda_available = False
+
+pytestmark = pytest.mark.skipif(
+    not cuda_available,
+    reason="Brak dostepu do urzadzenia CUDA lub symulatora CUDASIM",
+)
 
 from sequential_sgd import add_intercept, generate_synthetic_dataset
 from cuda_sgd import (
@@ -33,18 +40,19 @@ def test_cuda_kernels_execute_without_memory_error():
     d_weights = cuda.to_device(weights)
     d_errors = cuda.device_array(batch_size, dtype=np.float32)
     d_grad = cuda.device_array(n_features, dtype=np.float32)
+    d_indices = cuda.to_device(np.arange(batch_size, dtype=np.int32))
 
     blocks_b = (batch_size + threads_per_block - 1) // threads_per_block
     blocks_f = (n_features + threads_per_block - 1) // threads_per_block
 
     # Wywolanie jadra bledow
     compute_errors_cuda_kernel[blocks_b, threads_per_block](
-        d_X, d_y, d_weights, d_errors, 0, batch_size, n_features
+        d_X, d_y, d_weights, d_errors, d_indices, 0, batch_size, n_features
     )
 
     # Wywolanie jadra gradientu
     compute_gradient_cuda_kernel[blocks_f, threads_per_block](
-        d_X, d_errors, d_grad, 0, batch_size, n_features
+        d_X, d_errors, d_grad, d_indices, 0, batch_size, n_features
     )
 
     # Wywolanie jadra aktualizacji wag

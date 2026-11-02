@@ -294,19 +294,35 @@ def run_training(args: argparse.Namespace) -> tuple[NDArray[Any], dict[str, Any]
         )
 
     elif args.mode == "mpi":
-        from model_mpi import train_mpi_sgd
-        weights, history = train_mpi_sgd(
-            X_train_final,
-            y_train,
-            X_val=X_test_final,
-            y_val=y_test,
-            epochs=args.epochs,
-            batch_size=args.batch_size,
-            learning_rate=args.lr,
-            seed=args.seed,
-            comm=comm,
-            verbose=verbose,
-        )
+        if args.k and args.k > 1:
+            from model_mpi import train_local_sgd_mpi
+            weights, history = train_local_sgd_mpi(
+                X_train_final,
+                y_train,
+                X_val=X_test_final,
+                y_val=y_test,
+                epochs=args.epochs,
+                batch_size=args.batch_size,
+                learning_rate=args.lr,
+                sync_freq_k=args.k,
+                seed=args.seed,
+                comm=comm,
+                verbose=verbose,
+            )
+        else:
+            from model_mpi import train_mpi_sgd
+            weights, history = train_mpi_sgd(
+                X_train_final,
+                y_train,
+                X_val=X_test_final,
+                y_val=y_test,
+                epochs=args.epochs,
+                batch_size=args.batch_size,
+                learning_rate=args.lr,
+                seed=args.seed,
+                comm=comm,
+                verbose=verbose,
+            )
 
     elif args.mode == "cuda":
         from cuda_sgd import train_cuda_sgd

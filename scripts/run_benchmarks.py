@@ -3,7 +3,10 @@ import json
 import os
 from pathlib import Path
 import platform
+import shutil
+import subprocess
 import sys
+import tempfile
 import time
 from typing import Any
 import numpy as np
@@ -195,6 +198,8 @@ def benchmark_mpi_scaling(
 ) -> dict[str, Any]:
     """
     Bada skalowalnosc rozproszonego Local SGD dla roznych liczb procesow p.
+    Jesli w systemie dostepne jest mpiexec, uruchamia rzeczywiste procesy przez siec/IPC.
+    W przeciwnym razie wykorzystuje symulator wieloprocesowy jako awaryjny fallback.
     """
     max_cores = os.cpu_count() or 4
     if process_counts is None:
@@ -203,23 +208,74 @@ def benchmark_mpi_scaling(
         if 1 not in process_counts:
             process_counts.insert(0, 1)
 
-    print(f"\n--- Benchmark MPI / Local SGD Scaling (procesy: {process_counts}, K={sync_freq_k}) ---")
+    mpiexec_bin = shutil.which("mpiexec")
+    backend_desc = "Rzeczywiste mpiexec" if mpiexec_bin else "Fallback symulator"
+    print(f"\n--- Benchmark MPI / Local SGD Scaling ({backend_desc}, procesy: {process_counts}, K={sync_freq_k}) ---")
     results_by_procs: dict[int, dict[str, Any]] = {}
 
     for p in process_counts:
-        def run_once() -> None:
-            simulate_local_sgd_multiprocess(
-                X,
-                y,
-                n_workers=p,
-                epochs=epochs,
-                batch_size=batch_size,
-                learning_rate=0.01,
-                sync_freq_k=sync_freq_k,
-                seed=seed,
-            )
+        samples: list[float] = []
 
-        med_time, samples = measure_median_time(run_once, warmup_runs=1, measurement_runs=5)
+        if mpiexec_bin:
+            def run_mpi_real() -> float:
+                with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tf:
+                    hist_file = tf.name
+                try:
+                    cmd = [
+                        mpiexec_bin,
+                        "--oversubscribe",
+                        "-n", str(p),
+                        sys.executable,
+                        str(SRC_DIR / "main.py"),
+                        "--mode", "mpi",
+                        "--epochs", str(epochs),
+                        "--batch-size", str(batch_size),
+                        "--k", str(sync_freq_k),
+                        "--seed", str(seed),
+                        "--save-history", hist_file,
+                        "--quiet",
+                    ]
+                    csgo_p = REPO_ROOT / "data" / "csgo_round_snapshots.csv"
+                    if csgo_p.is_file():
+                        cmd.extend(["--data", str(csgo_p)])
+
+                    res = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True, timeout=60)
+                    if res.returncode != 0:
+                        raise RuntimeError(f"mpiexec zwrocil kod {res.returncode}:\n{res.stderr}")
+
+                    with open(hist_file, "r", encoding="utf-8") as f:
+                        hist_data = json.load(f)
+                    total_t = float(sum(hist_data.get("epoch_times", [])))
+                    return max(total_t, 0.001)
+                finally:
+                    if os.path.exists(hist_file):
+                        os.remove(hist_file)
+
+            try:
+                # Rozgrzewka
+                run_mpi_real()
+                # 5 wlasciwych pomiarow
+                for _ in range(5):
+                    samples.append(run_mpi_real())
+            except Exception as exc:
+                print(f"[Warn] Blad uruchomienia mpiexec dla p={p} ({exc}), przelaczam na symulator.")
+                samples = []
+
+        if not samples:
+            def run_sim() -> None:
+                simulate_local_sgd_multiprocess(
+                    X,
+                    y,
+                    n_workers=p,
+                    epochs=epochs,
+                    batch_size=batch_size,
+                    learning_rate=0.01,
+                    sync_freq_k=sync_freq_k,
+                    seed=seed,
+                )
+            _, samples = measure_median_time(run_sim, warmup_runs=1, measurement_runs=5)
+
+        med_time = float(np.median(samples))
         print(f"Procesy p={p:2d} | Mediana: {med_time:.4f}s | Probki: {[round(s, 4) for s in samples]}")
 
         results_by_procs[p] = {
