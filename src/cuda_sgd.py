@@ -133,6 +133,7 @@ def train_cuda_sgd(
         "accuracy": [],
         "val_loss": [],
         "val_accuracy": [],
+        "epoch_times": [],
         "epoch_time": [],
     }
 
@@ -165,6 +166,7 @@ def train_cuda_sgd(
             )
 
         elapsed = time.perf_counter() - t0
+        history["epoch_times"].append(elapsed)
         history["epoch_time"].append(elapsed)
 
         # Pobieramy same wagi na koniec epoki zeby policzyc metryki

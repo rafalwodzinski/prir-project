@@ -250,3 +250,8 @@ env/
 *.hdf5
 data/
 datasets/
+
+# Trained models and checkpoints
+models/
+*.npy
+*.npz
