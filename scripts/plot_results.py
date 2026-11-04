@@ -265,6 +265,84 @@ def plot_execution_time_comparison(
     return output_path
 
 
+def summarize_cuda_vs_seq(seq_hist: dict[str, Any], cuda_hist: dict[str, Any]) -> dict[str, Any]:
+    """
+    Podsumowanie porownania CUDA vs sekwencyjny (oba uruchomione w tym samym srodowisku, np. Colab).
+    Pierwsza epoka CUDA zawiera kompilacje JIT i transfer, wiec mediana liczona jest bez niej.
+    Speedup = T_seq / T_cuda (wartosc < 1 oznacza, ze GPU jest wolniejsze).
+    """
+    seq_t = [float(t) for t in seq_hist["epoch_times"]]
+    cuda_t = [float(t) for t in cuda_hist["epoch_times"]]
+    seq_med = float(np.median(seq_t[1:] if len(seq_t) > 1 else seq_t))
+    cuda_med = float(np.median(cuda_t[1:] if len(cuda_t) > 1 else cuda_t))
+    return {
+        "epochs_seq": len(seq_t),
+        "epochs_cuda": len(cuda_t),
+        "seq_median_epoch_time": seq_med,
+        "cuda_median_epoch_time": cuda_med,
+        "cuda_first_epoch_time": cuda_t[0],
+        "speedup_cuda_vs_seq": seq_med / cuda_med if cuda_med > 0 else 0.0,
+        "final_accuracy_seq": float(seq_hist["accuracy"][-1]),
+        "final_accuracy_cuda": float(cuda_hist["accuracy"][-1]),
+        "final_loss_seq": float(seq_hist["loss"][-1]),
+        "final_loss_cuda": float(cuda_hist["loss"][-1]),
+    }
+
+
+def plot_cuda_comparison(
+    seq_hist: dict[str, Any],
+    cuda_hist: dict[str, Any],
+    output_path: Path | None = None,
+) -> Path:
+    """
+    Wykres CUDA vs sekwencyjny: czasy epok (lewy) oraz krzywe Accuracy potwierdzajace poprawnosc (prawy).
+    """
+    if output_path is None:
+        output_path = FIGURES_DIR / "cuda_comparison.png"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    summary = summarize_cuda_vs_seq(seq_hist, cuda_hist)
+    seq_t = seq_hist["epoch_times"]
+    cuda_t = cuda_hist["epoch_times"]
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5), dpi=300)
+
+    ax1.plot(range(2, len(seq_t) + 1), seq_t[1:], "o-", color="#1f77b4", linewidth=2, label="Sekwencyjny (CPU)")
+    ax1.plot(range(2, len(cuda_t) + 1), cuda_t[1:], "s-", color="#d62728", linewidth=2, label="CUDA (GPU)")
+    ax1.set_title("Czas pojedynczej epoki", fontsize=11, fontweight="bold")
+    ax1.set_xlabel("Epoka [-] (epoka 1 pominięta: kompilacja JIT / transfer)", fontsize=10)
+    ax1.set_ylabel("Czas epoki [s]", fontsize=10)
+    ax1.set_ylim(bottom=0)
+    ax1.grid(True, linestyle="--", alpha=0.5)
+    ax1.legend(fontsize=10)
+    ax1.text(
+        0.02, 0.97,
+        f"Mediana: CPU {summary['seq_median_epoch_time'] * 1000:.1f} ms | GPU {summary['cuda_median_epoch_time'] * 1000:.1f} ms\n"
+        f"Speedup GPU vs CPU = {summary['speedup_cuda_vs_seq']:.2f}x\n"
+        f"1. epoka GPU: {summary['cuda_first_epoch_time']:.2f} s",
+        transform=ax1.transAxes, va="top", fontsize=9,
+        bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.8},
+    )
+
+    ax2.plot(range(1, len(seq_hist["accuracy"]) + 1), [a * 100 for a in seq_hist["accuracy"]],
+             "o-", color="#1f77b4", linewidth=2, label="Sekwencyjny (CPU)")
+    ax2.plot(range(1, len(cuda_hist["accuracy"]) + 1), [a * 100 for a in cuda_hist["accuracy"]],
+             "s--", color="#d62728", linewidth=2, label="CUDA (GPU)")
+    ax2.set_title("Accuracy na zbiorze treningowym (zgodność wyników)", fontsize=11, fontweight="bold")
+    ax2.set_xlabel("Epoka [-]", fontsize=10)
+    ax2.set_ylabel("Accuracy [%]", fontsize=10)
+    ax2.grid(True, linestyle="--", alpha=0.5)
+    ax2.legend(fontsize=10)
+
+    plt.suptitle("CUDA vs wersja sekwencyjna (zbiór CS:GO, to samo środowisko)", fontsize=12)
+    plt.tight_layout()
+    plt.savefig(output_path, bbox_inches="tight")
+    plt.close()
+
+    print(f"[OK] Wykres CUDA vs sekwencyjny zapisano do: {output_path}")
+    return output_path
+
+
 def main() -> None:
     results_file = REPORTS_DIR / "benchmark_results.json"
     if not results_file.exists():
@@ -277,6 +355,22 @@ def main() -> None:
     plot_speedup_and_efficiency(data)
     plot_batch_and_k_analysis(data)
     plot_execution_time_comparison(data)
+
+    # Wyniki CUDA (np. z Google Colab) - opcjonalne, jesli pliki historii istnieja
+    seq_file = REPORTS_DIR / "colab_seq_history.json"
+    cuda_file = REPORTS_DIR / "colab_cuda_history.json"
+    if seq_file.exists() and cuda_file.exists():
+        with open(seq_file, "r", encoding="utf-8") as f:
+            seq_hist = json.load(f)
+        with open(cuda_file, "r", encoding="utf-8") as f:
+            cuda_hist = json.load(f)
+        plot_cuda_comparison(seq_hist, cuda_hist)
+        summary = summarize_cuda_vs_seq(seq_hist, cuda_hist)
+        with open(REPORTS_DIR / "cuda_results.json", "w", encoding="utf-8") as f:
+            json.dump(summary, f, indent=2, ensure_ascii=False)
+        print(f"[OK] Podsumowanie CUDA zapisano do: {REPORTS_DIR / 'cuda_results.json'}")
+    else:
+        print("[Info] Brak reports/colab_*_history.json - pomijam wykres CUDA.")
 
 
 if __name__ == "__main__":

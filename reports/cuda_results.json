@@ -1,0 +1,12 @@
+{
+  "epochs_seq": 20,
+  "epochs_cuda": 20,
+  "seq_median_epoch_time": 0.04172485100002632,
+  "cuda_median_epoch_time": 0.10343085800013796,
+  "cuda_first_epoch_time": 1.4558164750001197,
+  "speedup_cuda_vs_seq": 0.4034081492388922,
+  "final_accuracy_seq": 0.7513377175067396,
+  "final_accuracy_cuda": 0.7513377175067396,
+  "final_loss_seq": 0.4838936924934387,
+  "final_loss_cuda": 0.4838936924934387
+}
