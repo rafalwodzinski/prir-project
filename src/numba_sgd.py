@@ -5,9 +5,9 @@ import numpy as np
 from numpy.typing import NDArray
 from numba import njit, prange, get_thread_id, get_num_threads
 
-from data_loader import load_and_preprocess_data, split_dataset, scale_features
-from math_utils import sigmoid, compute_bce_loss
-from sequential_sgd import add_intercept, compute_accuracy, predict_proba, generate_synthetic_dataset
+from data_loader import prepare_dataset
+from math_utils import SIGMOID_CLIP, compute_bce_loss
+from sequential_sgd import compute_accuracy, predict_proba, generate_synthetic_dataset
 
 
 @njit(parallel=True)
@@ -39,10 +39,10 @@ def compute_gradient_numba(
             z += X[i, j] * weights[j]
 
         # 2. Stabilna numerycznie funkcja sigmoidalna (zabezpieczenie przed overflow w exp)
-        if z < -85.0:
-            z_safe = -85.0
-        elif z > 85.0:
-            z_safe = 85.0
+        if z < -SIGMOID_CLIP:
+            z_safe = -SIGMOID_CLIP
+        elif z > SIGMOID_CLIP:
+            z_safe = SIGMOID_CLIP
         else:
             z_safe = z
 
@@ -112,16 +112,17 @@ def train_numba_sgd(
             grad = compute_gradient_numba(X_batch, y_batch, weights)
             weights = weights - learning_rate * grad
 
-        # 3. Ewaluacja po epoce i zbieranie historii
+        # Zegar epoki obejmuje wylacznie matematyke SGD (bez ewaluacji ponizej)
+        elapsed = time.perf_counter() - t0
+        history["epoch_times"].append(elapsed)
+
+        # 3. Ewaluacja po epoce i zbieranie historii (poza pomiarem czasu)
         train_probs = predict_proba(X_train, weights)
         epoch_loss = compute_bce_loss(y_train, train_probs)
         epoch_acc = compute_accuracy(y_train, train_probs)
 
         history["loss"].append(epoch_loss)
         history["accuracy"].append(epoch_acc)
-
-        elapsed = time.perf_counter() - t0
-        history["epoch_times"].append(elapsed)
 
         if X_val is not None and y_val is not None:
             val_probs = predict_proba(X_val, weights)
@@ -153,16 +154,16 @@ def main() -> None:
 
     if data_path.is_file():
         print(f"Wczytywanie danych CS:GO z: {data_path}")
-        X, y = load_and_preprocess_data(data_path, dtype=np.float32)
     else:
         print(f"Brak pliku {data_path} - uzywam syntetycznego zbioru danych do demonstracji.")
-        X, y = generate_synthetic_dataset(n_samples=4000, n_features=12, seed=42, dtype=np.float32)
 
-    X_train, X_test, y_train, y_test = split_dataset(X, y, test_size=0.2, seed=42)
-    X_train_scaled, X_test_scaled, _ = scale_features(X_train, X_test)
-
-    X_train_final = add_intercept(X_train_scaled)
-    X_test_final = add_intercept(X_test_scaled)
+    X_train_final, X_test_final, y_train, y_test = prepare_dataset(
+        data_path,
+        test_size=0.2,
+        seed=42,
+        dtype=np.float32,
+        fallback=lambda: generate_synthetic_dataset(n_samples=4000, n_features=12, seed=42, dtype=np.float32),
+    )
 
     print(
         f"Start treningu rownoleglego Numba Mini-Batch SGD ({get_num_threads()} watkow CPU): "

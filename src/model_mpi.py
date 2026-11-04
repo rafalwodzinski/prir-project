@@ -25,9 +25,9 @@ except (ImportError, RuntimeError):
 
     MPI = DummyMPI()  # type: ignore
 
-from data_loader import load_and_preprocess_data, split_dataset, scale_features
+from data_loader import prepare_dataset
 from math_utils import sigmoid, compute_bce_loss
-from sequential_sgd import add_intercept, compute_accuracy, predict_proba, generate_synthetic_dataset
+from sequential_sgd import compute_accuracy, predict_proba, generate_synthetic_dataset
 
 
 def split_batch_for_rank(
@@ -118,16 +118,17 @@ def train_mpi_sgd(
 
             weights = weights - learning_rate * grad
 
+        # Zegar epoki obejmuje wylacznie matematyke SGD + Allreduce (bez ewaluacji ponizej)
+        elapsed = time.perf_counter() - t0
         if rank == 0:
+            history["epoch_times"].append(elapsed)
+
             train_probs = predict_proba(X_train, weights)
             epoch_loss = compute_bce_loss(y_train, train_probs)
             epoch_acc = compute_accuracy(y_train, train_probs)
 
             history["loss"].append(epoch_loss)
             history["accuracy"].append(epoch_acc)
-
-            elapsed = time.perf_counter() - t0
-            history["epoch_times"].append(elapsed)
 
             if X_val is not None and y_val is not None:
                 val_probs = predict_proba(X_val, weights)
@@ -280,17 +281,17 @@ def main() -> None:
     if data_path.is_file():
         if rank == 0:
             print(f"[MPI rank=0/{size}] Wczytywanie danych CS:GO z: {data_path}")
-        X, y = load_and_preprocess_data(data_path, dtype=np.float32)
     else:
         if rank == 0:
             print(f"[MPI rank=0/{size}] Brak pliku {data_path} - uzywam syntetycznego zbioru danych.")
-        X, y = generate_synthetic_dataset(n_samples=4000, n_features=12, seed=42, dtype=np.float32)
 
-    X_train, X_test, y_train, y_test = split_dataset(X, y, test_size=0.2, seed=42)
-    X_train_scaled, X_test_scaled, _ = scale_features(X_train, X_test)
-
-    X_train_final = add_intercept(X_train_scaled)
-    X_test_final = add_intercept(X_test_scaled)
+    X_train_final, X_test_final, y_train, y_test = prepare_dataset(
+        data_path,
+        test_size=0.2,
+        seed=42,
+        dtype=np.float32,
+        fallback=lambda: generate_synthetic_dataset(n_samples=4000, n_features=12, seed=42, dtype=np.float32),
+    )
 
     k_val = 4
     if rank == 0:

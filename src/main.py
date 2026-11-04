@@ -12,8 +12,8 @@ SRC_DIR = Path(__file__).resolve().parent
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from data_loader import load_and_preprocess_data, split_dataset, scale_features
-from sequential_sgd import add_intercept, generate_synthetic_dataset, train_sequential_sgd
+from data_loader import prepare_dataset
+from sequential_sgd import generate_synthetic_dataset, train_sequential_sgd
 from numba_sgd import train_numba_sgd
 
 
@@ -243,20 +243,19 @@ def run_training(args: argparse.Namespace) -> tuple[NDArray[Any], dict[str, Any]
         repo_root = Path(__file__).resolve().parent.parent
         data_path = repo_root / args.data
 
-    if data_path.is_file():
-        if is_main_process and not args.quiet:
+    if is_main_process and not args.quiet:
+        if data_path.is_file():
             print(f"[Data] Wczytywanie danych z: {data_path}")
-        X, y = load_and_preprocess_data(data_path, dtype=np.float32)
-    else:
-        if is_main_process and not args.quiet:
+        else:
             print(f"[Data] Brak pliku {data_path} - generowanie syntetycznego zbioru (4000 probek, 12 cech).")
-        X, y = generate_synthetic_dataset(n_samples=4000, n_features=12, seed=args.seed, dtype=np.float32)
 
-    X_train, X_test, y_train, y_test = split_dataset(X, y, test_size=args.test_size, seed=args.seed)
-    X_train_scaled, X_test_scaled, _ = scale_features(X_train, X_test)
-
-    X_train_final = add_intercept(X_train_scaled)
-    X_test_final = add_intercept(X_test_scaled)
+    X_train_final, X_test_final, y_train, y_test = prepare_dataset(
+        data_path,
+        test_size=args.test_size,
+        seed=args.seed,
+        dtype=np.float32,
+        fallback=lambda: generate_synthetic_dataset(n_samples=4000, n_features=12, seed=args.seed, dtype=np.float32),
+    )
 
     if is_main_process and not args.quiet:
         print(

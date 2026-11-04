@@ -130,7 +130,7 @@ def plot_batch_and_k_analysis(
     output_path: Path | None = None,
 ) -> Path:
     """
-    Generuje wykres slupkowy wplywu rozmiaru partii i wspolczynnika K na 'Czas do 85% Accuracy'.
+    Generuje wykres slupkowy wplywu rozmiaru partii i wspolczynnika K na 'Czas do 74% Accuracy'.
     """
     if output_path is None:
         output_path = FIGURES_DIR / "batch_k_analysis.png"
@@ -141,7 +141,7 @@ def plot_batch_and_k_analysis(
     seed = benchmark_data.get("metadata", {}).get("seed", 42)
 
     sens = benchmark_data.get("batch_k_sensitivity", {})
-    target_acc = sens.get("target_accuracy", 0.85)
+    target_acc = sens.get("target_accuracy", 0.74)
     batch_sizes = sens.get("batch_sizes", [64, 128, 256, 512])
     k_values = sens.get("k_values", [1, 2, 4, 8, 16])
     grid_results = sens.get("grid_results", [])

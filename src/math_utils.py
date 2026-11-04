@@ -2,6 +2,10 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
+# Granica obcinania argumentu sigmoidy (float32: exp przepelnia sie ok. 88).
+# Wspolna dla NumPy, Numba i CUDA - jedyne zrodlo prawdy.
+SIGMOID_CLIP = 85.0
+
 
 def sigmoid(z: NDArray[Any]) -> NDArray[Any]:
     """
@@ -11,7 +15,7 @@ def sigmoid(z: NDArray[Any]) -> NDArray[Any]:
     # Dla float32 granica to ~88, dla float64 ~709
     # Ograniczenie do [-85, 85] dla float32 lub [-500, 500] dla float64 daje stabilne [0.0, 1.0]
     if np.issubdtype(z.dtype, np.floating) and z.dtype == np.float32:
-        clip_bound = 85.0
+        clip_bound = SIGMOID_CLIP
     else:
         clip_bound = 500.0
 

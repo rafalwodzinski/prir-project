@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 import numpy as np
@@ -120,3 +121,50 @@ def scale_features(
     X_test_scaled = np.ascontiguousarray(X_test_scaled, dtype=orig_dtype)
 
     return X_train_scaled, X_test_scaled, scaler
+
+
+def add_intercept(X: NDArray[Any]) -> NDArray[Any]:
+    """
+    Dokleja kolumne jedynek na poczatku macierzy X (jako bias / wyraz wolny),
+    zachowujac typ danych i ciaglosc pamieci C_CONTIGUOUS.
+    """
+    ones = np.ones((X.shape[0], 1), dtype=X.dtype)
+    X_with_bias = np.hstack([ones, X])
+    return np.ascontiguousarray(X_with_bias, dtype=X.dtype)
+
+
+def prepare_train_test(
+    X: NDArray[Any],
+    y: NDArray[Any],
+    test_size: float = 0.2,
+    seed: int = 42,
+) -> tuple[NDArray[Any], NDArray[Any], NDArray[Any], NDArray[Any]]:
+    """
+    Podzial -> standaryzacja (fit tylko na train) -> dodanie biasu dla gotowych tablic X, y.
+    Zwraca (X_train, X_test, y_train, y_test) gotowe do treningu.
+    """
+    X_train, X_test, y_train, y_test = split_dataset(X, y, test_size=test_size, seed=seed)
+    X_train_scaled, X_test_scaled, _ = scale_features(X_train, X_test)
+    return add_intercept(X_train_scaled), add_intercept(X_test_scaled), y_train, y_test
+
+
+def prepare_dataset(
+    filepath: Path | str,
+    test_size: float = 0.2,
+    seed: int = 42,
+    dtype: np.dtype | type = np.float32,
+    fallback: Callable[[], tuple[NDArray[Any], NDArray[Any]]] | None = None,
+) -> tuple[NDArray[Any], NDArray[Any], NDArray[Any], NDArray[Any]]:
+    """
+    Jedna funkcja wysokiego poziomu: wczytanie CSV -> podzial train/test -> standaryzacja
+    (bez data leakage) -> dodanie kolumny biasu.
+    Gdy plik nie istnieje i podano `fallback` (np. generator danych syntetycznych),
+    dane pochodza z `fallback()`; w przeciwnym razie rzucany jest FileNotFoundError.
+    Zwraca (X_train, X_test, y_train, y_test).
+    """
+    filepath = Path(filepath)
+    if filepath.is_file() or fallback is None:
+        X, y = load_and_preprocess_data(filepath, dtype=dtype)
+    else:
+        X, y = fallback()
+    return prepare_train_test(X, y, test_size=test_size, seed=seed)

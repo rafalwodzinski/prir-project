@@ -4,18 +4,8 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-from data_loader import load_and_preprocess_data, split_dataset, scale_features
+from data_loader import add_intercept, prepare_dataset  # noqa: F401  (add_intercept re-eksportowany)
 from math_utils import sigmoid, compute_bce_loss, compute_gradient
-
-
-def add_intercept(X: NDArray[Any]) -> NDArray[Any]:
-    """
-    Dokleja kolumne jedynek na poczatku macierzy X (jako bias / wyraz wolny),
-    zachowujac typ danych i ciaglosc pamieci C_CONTIGUOUS.
-    """
-    ones = np.ones((X.shape[0], 1), dtype=X.dtype)
-    X_with_bias = np.hstack([ones, X])
-    return np.ascontiguousarray(X_with_bias, dtype=X.dtype)
 
 
 def compute_accuracy(y_true: NDArray[Any], y_pred_probs: NDArray[Any], threshold: float = 0.5) -> float:
@@ -87,16 +77,17 @@ def train_sequential_sgd(
             # Aktualizacja wag: W = W - alpha * grad
             weights = weights - learning_rate * grad
 
-        # 3. Ewaluacja po epoce i zbieranie historii
+        # Zegar epoki obejmuje wylacznie matematyke SGD (bez ewaluacji ponizej)
+        elapsed = time.perf_counter() - t0
+        history["epoch_times"].append(elapsed)
+
+        # 3. Ewaluacja po epoce i zbieranie historii (poza pomiarem czasu)
         train_probs = predict_proba(X_train, weights)
         epoch_loss = compute_bce_loss(y_train, train_probs)
         epoch_acc = compute_accuracy(y_train, train_probs)
 
         history["loss"].append(epoch_loss)
         history["accuracy"].append(epoch_acc)
-
-        elapsed = time.perf_counter() - t0
-        history["epoch_times"].append(elapsed)
 
         if X_val is not None and y_val is not None:
             val_probs = predict_proba(X_val, weights)
@@ -150,17 +141,16 @@ def main() -> None:
 
     if data_path.is_file():
         print(f"Wczytywanie danych CS:GO z: {data_path}")
-        X, y = load_and_preprocess_data(data_path, dtype=np.float32)
     else:
         print(f"Brak pliku {data_path} - uzywam syntetycznego zbioru danych do demonstracji.")
-        X, y = generate_synthetic_dataset(n_samples=4000, n_features=12, seed=42, dtype=np.float32)
 
-    X_train, X_test, y_train, y_test = split_dataset(X, y, test_size=0.2, seed=42)
-    X_train_scaled, X_test_scaled, _ = scale_features(X_train, X_test)
-
-    # Doklejamy kolumne jedynek (intercept/bias), zeby model uczyl sie rowniez progu odciecia
-    X_train_final = add_intercept(X_train_scaled)
-    X_test_final = add_intercept(X_test_scaled)
+    X_train_final, X_test_final, y_train, y_test = prepare_dataset(
+        data_path,
+        test_size=0.2,
+        seed=42,
+        dtype=np.float32,
+        fallback=lambda: generate_synthetic_dataset(n_samples=4000, n_features=12, seed=42, dtype=np.float32),
+    )
 
     print(
         f"Start treningu sekwencyjnego Mini-Batch SGD: "

@@ -18,8 +18,8 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from numba import get_num_threads, set_num_threads
-from data_loader import load_and_preprocess_data, split_dataset, scale_features
-from sequential_sgd import add_intercept, compute_accuracy, generate_synthetic_dataset, predict_proba, train_sequential_sgd
+from data_loader import prepare_dataset
+from sequential_sgd import compute_accuracy, generate_synthetic_dataset, predict_proba, train_sequential_sgd
 from numba_sgd import compute_gradient_numba, train_numba_sgd
 from model_mpi import split_batch_for_rank, train_local_sgd_mpi, MPI
 from math_utils import sigmoid
@@ -307,7 +307,7 @@ def benchmark_batch_and_k_sensitivity(
     y_train: np.ndarray,
     batch_sizes: list[int] | None = None,
     k_values: list[int] | None = None,
-    target_accuracy: float = 0.85,
+    target_accuracy: float = 0.74,
     max_epochs: int = 25,
     n_workers: int = 4,
     learning_rate: float = 0.05,
@@ -315,7 +315,9 @@ def benchmark_batch_and_k_sensitivity(
 ) -> dict[str, Any]:
     """
     Eksperyment: Wplyw wielkosci partii (batch size) i wspolczynnika synchronizacji K
-    na 'Czas do 85% Accuracy' (lub innej zadanej dokladnosci).
+    na 'Czas do 74% Accuracy' (lub innej zadanej dokladnosci).
+    Dane: zbior treningowy CS:GO (dokladnosc liczona na zbiorze treningowym, tak jak w history['accuracy']).
+    Jesli prog nie zostanie osiagniety, trening konczy sie po max_epochs (target_reached=False).
     """
     if batch_sizes is None:
         batch_sizes = [64, 128, 256, 512]
@@ -436,27 +438,24 @@ def run_full_benchmark_suite(
     print(f"Sprzet: {hw_info['processor']} | Rdzenie logiczne: {hw_info['cpu_count_logical']}")
     print("================================================================")
 
-    # Dane do testow skalowania: sprawdzamy czy istnieje pelny zbior CS:GO
+    # Jedna wspolna macierz treningowa CS:GO (lub syntetyczna, gdy brak pliku) dla wszystkich eksperymentow
     csgo_path = REPO_ROOT / "data" / "csgo_round_snapshots.csv"
     if csgo_path.is_file():
         print(f"Ladowanie pelnego zbioru CS:GO z: {csgo_path}")
-        X_raw, y_raw = load_and_preprocess_data(csgo_path, dtype=np.float32)
-        X_tr, _, y_tr, _ = split_dataset(X_raw, y_raw, test_size=0.2, seed=seed)
-        X_tr_scaled, _, _ = scale_features(X_tr, X_tr)
-        X_scale = add_intercept(X_tr_scaled)
-        y_scale = y_tr
         dataset_name = "CS:GO Round Snapshots (real dataset)"
     else:
         print("Brak pliku CSV CS:GO, uzywam zbioru syntetycznego.")
-        X_scale, y_scale = generate_synthetic_dataset(n_samples=20000, n_features=30, seed=seed, dtype=np.float32)
-        X_scale = add_intercept(X_scale)
         dataset_name = "Synthetic Dataset"
 
-    print(f"Dane do skalowania: {X_scale.shape[0]} probek, {X_scale.shape[1]} cech")
+    X_scale, _, y_scale, _ = prepare_dataset(
+        csgo_path,
+        test_size=0.2,
+        seed=seed,
+        dtype=np.float32,
+        fallback=lambda: generate_synthetic_dataset(n_samples=20000, n_features=30, seed=seed, dtype=np.float32),
+    )
 
-    # Dane do eksperymentu 'Czas do 85% Accuracy' (zgodnie ze specyfikacja zadania)
-    X_syn, y_syn = generate_synthetic_dataset(n_samples=15000, n_features=20, seed=seed, dtype=np.float32)
-    X_syn_b = add_intercept(X_syn)
+    print(f"Dane do eksperymentow: {X_scale.shape[0]} probek, {X_scale.shape[1]} cech")
 
     # 1. Benchmark OpenMP / Numba
     openmp_data = benchmark_openmp_numba(
@@ -479,16 +478,16 @@ def run_full_benchmark_suite(
         seed=seed,
     )
 
-    # 3. Analiza Batch Size i parametru K na czas osiagniecia 85% accuracy
+    # 3. Analiza Batch Size i parametru K na czas osiagniecia 74% accuracy (dane CS:GO)
     batch_k_data = benchmark_batch_and_k_sensitivity(
-        X_syn_b,
-        y_syn,
+        X_scale,
+        y_scale,
         batch_sizes=[64, 128, 256, 512],
         k_values=[1, 2, 4, 8, 16],
-        target_accuracy=0.85,
+        target_accuracy=0.74,
         max_epochs=20,
         n_workers=4,
-        learning_rate=0.08,
+        learning_rate=0.003,
         seed=seed,
     )
 

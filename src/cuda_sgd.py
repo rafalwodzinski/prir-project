@@ -16,9 +16,9 @@ except Exception:
     os.environ["NUMBA_ENABLE_CUDASIM"] = "1"
     from numba import cuda
 
-from data_loader import load_and_preprocess_data, split_dataset, scale_features
-from math_utils import compute_bce_loss
-from sequential_sgd import add_intercept, compute_accuracy, predict_proba, generate_synthetic_dataset
+from data_loader import prepare_dataset
+from math_utils import SIGMOID_CLIP, compute_bce_loss
+from sequential_sgd import compute_accuracy, predict_proba, generate_synthetic_dataset
 
 
 @cuda.jit
@@ -46,10 +46,10 @@ def compute_errors_cuda_kernel(
             z += d_X[row, j] * d_weights[j]
 
         # Ochrona przed overflowem
-        if z < -85.0:
-            z_safe = -85.0
-        elif z > 85.0:
-            z_safe = 85.0
+        if z < -SIGMOID_CLIP:
+            z_safe = -SIGMOID_CLIP
+        elif z > SIGMOID_CLIP:
+            z_safe = SIGMOID_CLIP
         else:
             z_safe = z
 
@@ -142,6 +142,8 @@ def train_cuda_sgd(
     }
 
     for epoch in range(1, epochs + 1):
+        # Synchronizacja: wszystkie wczesniejsze operacje GPU musza sie skonczyc przed startem zegara
+        cuda.synchronize()
         t0 = time.perf_counter()
 
         # Tasowanie indeksow i przeslanie lekkiej tablicy int32 do GPU
@@ -170,6 +172,8 @@ def train_cuda_sgd(
                 d_weights, d_grad, learning_rate, n_features
             )
 
+        # Kernele sa asynchroniczne - czekamy na ich zakonczenie przed odczytem zegara
+        cuda.synchronize()
         elapsed = time.perf_counter() - t0
         history["epoch_times"].append(elapsed)
         history["epoch_time"].append(elapsed)
@@ -213,16 +217,16 @@ def main() -> None:
 
     if data_path.is_file():
         print(f"Wczytywanie: {data_path}")
-        X, y = load_and_preprocess_data(data_path, dtype=np.float32)
     else:
         print("Brak pliku CSV - uzywam syntetycznego zbioru danych.")
-        X, y = generate_synthetic_dataset(n_samples=4000, n_features=12, seed=42, dtype=np.float32)
 
-    X_train, X_test, y_train, y_test = split_dataset(X, y, test_size=0.2, seed=42)
-    X_train_scaled, X_test_scaled, _ = scale_features(X_train, X_test)
-
-    X_train_final = add_intercept(X_train_scaled)
-    X_test_final = add_intercept(X_test_scaled)
+    X_train_final, X_test_final, y_train, y_test = prepare_dataset(
+        data_path,
+        test_size=0.2,
+        seed=42,
+        dtype=np.float32,
+        fallback=lambda: generate_synthetic_dataset(n_samples=4000, n_features=12, seed=42, dtype=np.float32),
+    )
 
     print(f"Trening CUDA: train={X_train_final.shape}, test={X_test_final.shape}, batch=256")
     weights, history = train_cuda_sgd(

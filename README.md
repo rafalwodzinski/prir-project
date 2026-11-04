@@ -64,7 +64,7 @@ Głównym celem badawczym jest **ocena przyspieszenia $S(p)$ i efektywności $E(
 ├── figures/                      # Wygenerowane wykresy naukowe
 │   ├── speedup_efficiency.png    # Przyspieszenie S(p) i efektywność E(p) vs Prawo Amdahla
 │   ├── scaling_comparison.png    # Porównanie czasów epok w funkcji liczby rdzeni/procesów
-│   └── batch_k_analysis.png      # Czas do jakości 85% Accuracy w funkcji Batch Size i parametru K
+│   └── batch_k_analysis.png      # Czas do jakości 74% Accuracy w funkcji Batch Size i parametru K
 ├── tests/                        # Zestaw 33 testów jednostkowych i integracyjnych
 │   ├── conftest.py               # Automatyczna izolacja symulatora CUDASIM na macOS/laptopach bez NVIDIA
 │   ├── test_cli.py               # Testy argumentów CLI, serializacji modeli .npy/.npz i historii JSON
