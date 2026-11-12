@@ -27,6 +27,18 @@ from model_mpi import split_batch_for_rank, train_local_sgd_mpi, MPI
 from math_utils import sigmoid
 
 
+def _mpi_subprocess_env() -> dict[str, str]:
+    """
+    Zwraca srodowisko dla procesow potomnych mpiexec.
+    W kontenerach (np. Google Colab) skrypt dziala jako root, wiec OpenMPI wymaga flagi zezwolenia.
+    """
+    env = os.environ.copy()
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        env["OMPI_ALLOW_RUN_AS_ROOT"] = "1"
+        env["OMPI_ALLOW_RUN_AS_ROOT_CONFIRM"] = "1"
+    return env
+
+
 def has_physical_cuda_gpu() -> tuple[bool, str | None]:
     """
     Sprawdza, czy dostepna jest fizyczna karta NVIDIA CUDA (z pominięciem CUDASIM).
@@ -259,7 +271,7 @@ def benchmark_mpi_scaling(
                     if csgo_p.is_file():
                         cmd.extend(["--data", str(csgo_p)])
 
-                    res = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True, timeout=60)
+                    res = subprocess.run(cmd, cwd=REPO_ROOT, env=_mpi_subprocess_env(), capture_output=True, text=True, timeout=60)
                     if res.returncode != 0:
                         raise RuntimeError(f"mpiexec zwrocil kod {res.returncode}:\n{res.stderr}")
 
@@ -555,7 +567,7 @@ def benchmark_data_size_scaling(
                     "--save-history", hist_file,
                     "--quiet",
                 ]
-                res = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True, timeout=300)
+                res = subprocess.run(cmd, cwd=REPO_ROOT, env=_mpi_subprocess_env(), capture_output=True, text=True, timeout=300)
                 if res.returncode != 0:
                     raise RuntimeError(f"mpiexec error {res.returncode}: {res.stderr}")
                 with open(hist_file, "r", encoding="utf-8") as f:
