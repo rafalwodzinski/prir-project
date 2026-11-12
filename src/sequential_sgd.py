@@ -125,7 +125,11 @@ def generate_synthetic_dataset(
     uzywany gdy plik csgo_round_snapshots.csv nie jest dostepny lokalnie.
     """
     rng = np.random.default_rng(seed)
-    X = rng.normal(0.0, 1.0, size=(n_samples, n_features)).astype(dtype)
+    # Dla duzych zbiorow (> 50k) generujemy bezposrednio w docelowym dtype, by oszczedzic RAM
+    if n_samples > 50_000 and dtype in (np.float32, np.float64):
+        X = rng.standard_normal(size=(n_samples, n_features), dtype=dtype)
+    else:
+        X = rng.normal(0.0, 1.0, size=(n_samples, n_features)).astype(dtype)
     true_w = rng.uniform(-2.0, 2.0, size=(n_features,)).astype(dtype)
     true_b = dtype(0.35)
 

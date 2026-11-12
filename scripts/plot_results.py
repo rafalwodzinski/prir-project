@@ -343,6 +343,109 @@ def plot_cuda_comparison(
     return output_path
 
 
+def _format_sample_count(n: int) -> str:
+    """Formatuje liczbe probek do czytelnej etykiety (np. 100k, 1M, 5M)."""
+    if n >= 1_000_000:
+        val = n / 1_000_000
+        return f"{val:g}M"
+    if n >= 1_000:
+        val = n / 1_000
+        return f"{val:g}k"
+    return str(n)
+
+
+def plot_data_size_scaling(
+    benchmark_data: dict[str, Any],
+    output_path: Path | None = None,
+) -> Path | None:
+    """
+    Generuje dwupanelowy wykres skalowania wzgledem rozmiaru danych (n_samples):
+    - Lewy: Mediana czasu epoki [s] dla Seq, Numba, MPI oraz (opcjonalnie) CUDA
+    - Prawy: Speedup wzgledem wersji sekwencyjnej (T_seq / T_variant) z linia progu 1.0x
+    """
+    scaling = benchmark_data.get("data_size_scaling")
+    if not scaling or not scaling.get("results"):
+        return None
+
+    if output_path is None:
+        output_path = FIGURES_DIR / "data_size_scaling.png"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    rows = scaling["results"]
+    sizes = [r["n_samples"] for r in rows]
+    labels = [_format_sample_count(n) for n in sizes]
+
+    t_seq = [r["seq_epoch_time"] for r in rows]
+    t_numba = [r["numba_epoch_time"] for r in rows]
+    t_mpi = [r["mpi_epoch_time"] for r in rows]
+    has_cuda = all(r.get("cuda_epoch_time") is not None for r in rows)
+    t_cuda = [r["cuda_epoch_time"] for r in rows] if has_cuda else []
+
+    s_numba = [r["speedup_numba"] for r in rows]
+    s_mpi = [r["speedup_mpi"] for r in rows]
+    s_cuda = [r["speedup_cuda"] for r in rows] if has_cuda else []
+
+    n_threads = scaling.get("numba_threads", "?")
+    n_procs = scaling.get("mpi_processes", "?")
+    n_feat = scaling.get("n_features", "?")
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5.5), dpi=300)
+
+    # Lewy panel: czas epoki (skala log-log, bo zakres n_samples to 100k -> 5M)
+    ax1.plot(sizes, t_seq, "o--", color="#444444", linewidth=2, markersize=6, label="Sequential (CPU 1T)")
+    ax1.plot(sizes, t_numba, "o-", color="#1f77b4", linewidth=2, markersize=6, label=f"Numba / OpenMP ({n_threads}T)")
+    ax1.plot(sizes, t_mpi, "s-", color="#2ca02c", linewidth=2, markersize=6, label=f"MPI Local-SGD ({n_procs}P)")
+    if has_cuda:
+        gpu_label = scaling.get("cuda_device_name") or "GPU"
+        ax1.plot(sizes, t_cuda, "^-", color="#d62728", linewidth=2, markersize=7, label=f"CUDA ({gpu_label})")
+
+    ax1.set_xscale("log")
+    ax1.set_yscale("log")
+    ax1.set_xticks(sizes)
+    ax1.set_xticklabels(labels)
+    ax1.set_title("Czas epoki w funkcji rozmiaru zbioru danych", fontsize=11, fontweight="bold")
+    ax1.set_xlabel("Liczba próbek n_samples [-]", fontsize=10)
+    ax1.set_ylabel("Mediana czasu epoki [s] (skala log)", fontsize=10)
+    ax1.grid(True, which="both", linestyle="--", alpha=0.45)
+    ax1.legend(fontsize=9)
+
+    # Prawy panel: speedup wzgledem Sequential
+    ax2.axhline(1.0, color="black", linestyle="--", linewidth=1.3, label="Próg opłacalności (1.0x vs Sequential)")
+    ax2.plot(sizes, s_numba, "o-", color="#1f77b4", linewidth=2, markersize=6, label=f"Numba / OpenMP ({n_threads}T)")
+    ax2.plot(sizes, s_mpi, "s-", color="#2ca02c", linewidth=2, markersize=6, label=f"MPI Local-SGD ({n_procs}P)")
+    if has_cuda:
+        ax2.plot(sizes, s_cuda, "^-", color="#d62728", linewidth=2, markersize=7, label="CUDA (GPU)")
+
+    for x_val, s_val in zip(sizes, s_numba):
+        ax2.annotate(f"{s_val:.2f}x", (x_val, s_val), textcoords="offset points", xytext=(0, 7), ha="center", fontsize=8, color="#1f77b4")
+    for x_val, s_val in zip(sizes, s_mpi):
+        ax2.annotate(f"{s_val:.2f}x", (x_val, s_val), textcoords="offset points", xytext=(0, -13), ha="center", fontsize=8, color="#2ca02c")
+    if has_cuda:
+        for x_val, s_val in zip(sizes, s_cuda):
+            ax2.annotate(f"{s_val:.2f}x", (x_val, s_val), textcoords="offset points", xytext=(0, 7), ha="center", fontsize=8, color="#d62728")
+
+    ax2.set_xscale("log")
+    ax2.set_xticks(sizes)
+    ax2.set_xticklabels(labels)
+    ax2.set_ylim(bottom=0)
+    ax2.set_title("Przyspieszenie (Speedup) względem Sequential", fontsize=11, fontweight="bold")
+    ax2.set_xlabel("Liczba próbek n_samples [-]", fontsize=10)
+    ax2.set_ylabel("Speedup T_seq / T_variant [-]", fontsize=10)
+    ax2.grid(True, which="both", linestyle="--", alpha=0.45)
+    ax2.legend(fontsize=9)
+
+    plt.suptitle(
+        f"Skalowanie względem rozmiaru danych ({n_feat} cech, batch={scaling.get('batch_size', 512)})",
+        fontsize=12,
+    )
+    plt.tight_layout()
+    plt.savefig(output_path, bbox_inches="tight")
+    plt.close()
+
+    print(f"[OK] Wykres skalowania rozmiaru danych zapisano do: {output_path}")
+    return output_path
+
+
 def main() -> None:
     results_file = REPORTS_DIR / "benchmark_results.json"
     if not results_file.exists():
@@ -355,6 +458,8 @@ def main() -> None:
     plot_speedup_and_efficiency(data)
     plot_batch_and_k_analysis(data)
     plot_execution_time_comparison(data)
+    if data.get("data_size_scaling"):
+        plot_data_size_scaling(data)
 
     # Wyniki CUDA (np. z Google Colab) - opcjonalne, jesli pliki historii istnieja
     seq_file = REPORTS_DIR / "colab_seq_history.json"
