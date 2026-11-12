@@ -4,8 +4,14 @@ import tempfile
 import numpy as np
 import pytest
 
-from scripts.run_benchmarks import measure_median_time, get_hardware_info
-from scripts.plot_results import compute_amdahl_speedup, fit_parallel_fraction, plot_speedup_and_efficiency, plot_batch_and_k_analysis
+from scripts.run_benchmarks import benchmark_data_size_scaling, measure_median_time, get_hardware_info
+from scripts.plot_results import (
+    compute_amdahl_speedup,
+    fit_parallel_fraction,
+    plot_speedup_and_efficiency,
+    plot_batch_and_k_analysis,
+    plot_data_size_scaling,
+)
 
 
 def test_measure_median_time_discards_warmup_and_collects_5_samples():
@@ -132,3 +138,35 @@ def test_plot_generation_creates_valid_image_files(tmp_path: Path):
 
     assert out_batch_k.is_file(), "Wykres Batch-K powinien zostac utworzony"
     assert out_batch_k.stat().st_size > 1000, "Plik PNG nie moze byc pusty"
+
+
+def test_data_size_scaling_runner_and_plot(tmp_path: Path):
+    """
+    Sprawdza dzialanie benchmark_data_size_scaling na malych danych
+    oraz generowanie wykresu plot_data_size_scaling (z danymi CUDA i bez nich).
+    """
+    res = benchmark_data_size_scaling(
+        sample_sizes=[200, 400],
+        n_features=8,
+        epochs=2,
+        batch_size=64,
+        n_threads=2,
+        n_mpi_procs=2,
+    )
+    assert len(res["results"]) == 2
+    assert res["results"][0]["n_samples"] == 200
+    assert res["results"][0]["seq_epoch_time"] > 0
+    assert res["results"][0]["speedup_numba"] > 0
+    assert res["results"][0]["speedup_mpi"] > 0
+
+    # Test generowania wykresu (wersja z danymi CUDA w mocku)
+    res_with_cuda = dict(res)
+    res_with_cuda["cuda_device_name"] = "Mock T4"
+    res_with_cuda["results"] = [
+        dict(r, cuda_epoch_time=r["seq_epoch_time"] * 0.2, speedup_cuda=5.0)
+        for r in res["results"]
+    ]
+    out_plot = tmp_path / "data_size_scaling.png"
+    plot_data_size_scaling({"data_size_scaling": res_with_cuda}, output_path=out_plot)
+    assert out_plot.is_file()
+    assert out_plot.stat().st_size > 1000

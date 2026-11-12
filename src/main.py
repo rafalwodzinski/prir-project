@@ -12,7 +12,7 @@ SRC_DIR = Path(__file__).resolve().parent
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from data_loader import prepare_dataset
+from data_loader import add_intercept, prepare_dataset, prepare_train_test
 from sequential_sgd import generate_synthetic_dataset, train_sequential_sgd
 from numba_sgd import train_numba_sgd
 
@@ -212,6 +212,18 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         help="Czestotliwosc synchronizacji K dla wariantu MPI Local SGD",
     )
     parser.add_argument(
+        "--synthetic-samples",
+        type=int,
+        default=None,
+        help="Jesli podano, wymusza wygenerowanie syntetycznego zbioru o tej liczbie probek",
+    )
+    parser.add_argument(
+        "--synthetic-features",
+        type=int,
+        default=100,
+        help="Liczba cech dla zbioru syntetycznego (uzywane z --synthetic-samples)",
+    )
+    parser.add_argument(
         "--quiet",
         action="store_true",
         help="Wyciszenie szczegolowych logow epok",
@@ -238,28 +250,51 @@ def run_training(args: argparse.Namespace) -> tuple[NDArray[Any], dict[str, Any]
             is_main_process = True
 
     # 1. Wczytanie i preprocessing danych
-    data_path = Path(args.data)
-    if not data_path.is_absolute():
-        repo_root = Path(__file__).resolve().parent.parent
-        data_path = repo_root / args.data
+    synthetic_samples = getattr(args, "synthetic_samples", None)
+    synthetic_features = getattr(args, "synthetic_features", 100)
 
-    if is_main_process and not args.quiet:
-        if data_path.is_file():
-            print(f"[Data] Wczytywanie danych z: {data_path}")
+    if synthetic_samples is not None:
+        if is_main_process and not args.quiet:
+            print(f"[Data] Generowanie syntetycznego zbioru ({synthetic_samples} probek, {synthetic_features} cech).")
+        X_syn, y_syn = generate_synthetic_dataset(
+            n_samples=synthetic_samples,
+            n_features=synthetic_features,
+            seed=args.seed,
+            dtype=np.float32,
+        )
+        if args.test_size > 0:
+            X_train_final, X_test_final, y_train, y_test = prepare_train_test(
+                X_syn, y_syn, test_size=args.test_size, seed=args.seed
+            )
         else:
-            print(f"[Data] Brak pliku {data_path} - generowanie syntetycznego zbioru (4000 probek, 12 cech).")
+            X_train_final = add_intercept(X_syn)
+            y_train = y_syn
+            X_test_final = None
+            y_test = None
+    else:
+        data_path = Path(args.data)
+        if not data_path.is_absolute():
+            repo_root = Path(__file__).resolve().parent.parent
+            data_path = repo_root / args.data
 
-    X_train_final, X_test_final, y_train, y_test = prepare_dataset(
-        data_path,
-        test_size=args.test_size,
-        seed=args.seed,
-        dtype=np.float32,
-        fallback=lambda: generate_synthetic_dataset(n_samples=4000, n_features=12, seed=args.seed, dtype=np.float32),
-    )
+        if is_main_process and not args.quiet:
+            if data_path.is_file():
+                print(f"[Data] Wczytywanie danych z: {data_path}")
+            else:
+                print(f"[Data] Brak pliku {data_path} - generowanie syntetycznego zbioru (4000 probek, 12 cech).")
+
+        X_train_final, X_test_final, y_train, y_test = prepare_dataset(
+            data_path,
+            test_size=args.test_size,
+            seed=args.seed,
+            dtype=np.float32,
+            fallback=lambda: generate_synthetic_dataset(n_samples=4000, n_features=12, seed=args.seed, dtype=np.float32),
+        )
 
     if is_main_process and not args.quiet:
+        test_shape = X_test_final.shape if X_test_final is not None else None
         print(
-            f"[Start] Tryb: {args.mode.upper()} | Train: {X_train_final.shape} | Test: {X_test_final.shape} | "
+            f"[Start] Tryb: {args.mode.upper()} | Train: {X_train_final.shape} | Test: {test_shape} | "
             f"Epochs: {args.epochs} | Batch: {args.batch_size} | LR: {args.lr} | Seed: {args.seed}"
         )
 

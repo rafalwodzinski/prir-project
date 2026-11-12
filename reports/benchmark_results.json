@@ -10,7 +10,8 @@
       "system": "Darwin",
       "release": "27.0.0"
     },
-    "note_cuda_synchronize": "W srodowiskach CUDA kernele GPU sa asynchroniczne z perspektywy CPU. Do wiarygodnego pomiaru czasu kerneli konieczne jest wywolanie cuda.synchronize() bezposrednio przed i po pomiarze."
+    "note_cuda_synchronize": "W srodowiskach CUDA kernele GPU sa asynchroniczne z perspektywy CPU. Do wiarygodnego pomiaru czasu kerneli konieczne jest wywolanie cuda.synchronize() bezposrednio przed i po pomiarze.",
+    "data_scaling_updated_at": "2026-11-12 10:41:09"
   },
   "openmp_benchmark": {
     "thread_counts": [
@@ -469,6 +470,72 @@
         "median_epochs": 4,
         "accuracy": 0.7413201535822237,
         "target_reached": true
+      }
+    ]
+  },
+  "data_size_scaling": {
+    "sample_sizes": [
+      100000,
+      500000,
+      1000000,
+      5000000
+    ],
+    "n_features": 101,
+    "epochs": 4,
+    "batch_size": 4096,
+    "numba_threads": 8,
+    "mpi_processes": 4,
+    "mpi_backend": "mpiexec",
+    "cuda_available": true,
+    "cuda_device_name": "Tesla T4",
+    "results": [
+      {
+        "n_samples": 100000,
+        "n_features": 101,
+        "memory_mb": 38.91,
+        "seq_epoch_time": 0.03638410799999292,
+        "numba_epoch_time": 0.051515160999997534,
+        "mpi_epoch_time": 0.13114676999998665,
+        "cuda_epoch_time": 0.038078630000200064,
+        "speedup_numba": 0.7062796134907675,
+        "speedup_mpi": 0.27743045444425835,
+        "speedup_cuda": 0.9554993969006175
+      },
+      {
+        "n_samples": 500000,
+        "n_features": 101,
+        "memory_mb": 194.55,
+        "seq_epoch_time": 0.17356417799987867,
+        "numba_epoch_time": 0.17575471500003914,
+        "mpi_epoch_time": 0.26294292099987615,
+        "cuda_epoch_time": 0.10705210800006171,
+        "speedup_numba": 0.9875363969600475,
+        "speedup_mpi": 0.6600830984149614,
+        "speedup_cuda": 1.6213055608375186
+      },
+      {
+        "n_samples": 1000000,
+        "n_features": 101,
+        "memory_mb": 389.1,
+        "seq_epoch_time": 0.31333007299986093,
+        "numba_epoch_time": 0.3393659519999801,
+        "mpi_epoch_time": 0.5207141729999876,
+        "cuda_epoch_time": 0.18518552099999397,
+        "speedup_numba": 0.9232808157486562,
+        "speedup_mpi": 0.6017314089890701,
+        "speedup_cuda": 1.6919793259639944
+      },
+      {
+        "n_samples": 5000000,
+        "n_features": 101,
+        "memory_mb": 1945.5,
+        "seq_epoch_time": 1.4382536130001426,
+        "numba_epoch_time": 1.5051858490000996,
+        "mpi_epoch_time": 1.8326175949998742,
+        "cuda_epoch_time": 0.9112978420000672,
+        "speedup_numba": 0.9555322447095684,
+        "speedup_mpi": 0.7848083620523361,
+        "speedup_cuda": 1.5782475791268653
       }
     ]
   }

@@ -1,4 +1,6 @@
+import argparse
 from dataclasses import asdict, dataclass
+import gc
 import json
 import os
 from pathlib import Path
@@ -18,11 +20,41 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from numba import get_num_threads, set_num_threads
-from data_loader import prepare_dataset
+from data_loader import add_intercept, prepare_dataset
 from sequential_sgd import compute_accuracy, generate_synthetic_dataset, predict_proba, train_sequential_sgd
 from numba_sgd import compute_gradient_numba, train_numba_sgd
 from model_mpi import split_batch_for_rank, train_local_sgd_mpi, MPI
 from math_utils import sigmoid
+
+
+def _mpi_subprocess_env() -> dict[str, str]:
+    """
+    Zwraca srodowisko dla procesow potomnych mpiexec.
+    W kontenerach (np. Google Colab) skrypt dziala jako root, wiec OpenMPI wymaga flagi zezwolenia.
+    """
+    env = os.environ.copy()
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        env["OMPI_ALLOW_RUN_AS_ROOT"] = "1"
+        env["OMPI_ALLOW_RUN_AS_ROOT_CONFIRM"] = "1"
+    return env
+
+
+def has_physical_cuda_gpu() -> tuple[bool, str | None]:
+    """
+    Sprawdza, czy dostepna jest fizyczna karta NVIDIA CUDA (z pominięciem CUDASIM).
+    Musi byc wywolane przed zaimportowaniem cuda_sgd, aby nie wymuszac CUDASIM.
+    """
+    if os.environ.get("NUMBA_ENABLE_CUDASIM") == "1":
+        return False, None
+    try:
+        from numba import cuda
+        if cuda.is_available():
+            device = cuda.get_current_device()
+            name = device.name.decode("utf-8", errors="replace") if isinstance(device.name, bytes) else str(device.name)
+            return True, name
+    except Exception:
+        pass
+    return False, None
 
 
 def get_hardware_info() -> dict[str, Any]:
@@ -239,7 +271,7 @@ def benchmark_mpi_scaling(
                     if csgo_p.is_file():
                         cmd.extend(["--data", str(csgo_p)])
 
-                    res = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True, timeout=60)
+                    res = subprocess.run(cmd, cwd=REPO_ROOT, env=_mpi_subprocess_env(), capture_output=True, text=True, timeout=60)
                     if res.returncode != 0:
                         raise RuntimeError(f"mpiexec zwrocil kod {res.returncode}:\n{res.stderr}")
 
@@ -419,10 +451,210 @@ def benchmark_batch_and_k_sensitivity(
     }
 
 
+def _median_epoch_time(epoch_times: list[float]) -> float:
+    """
+    Zwraca mediane czasu epok z pominieciem pierwszej epoki (rozgrzewka JIT/cache),
+    jesli dostepne sa co najmniej 2 epoki.
+    """
+    if not epoch_times:
+        return 0.0
+    relevant = epoch_times[1:] if len(epoch_times) > 1 else epoch_times
+    return float(np.median(relevant))
+
+
+def benchmark_data_size_scaling(
+    sample_sizes: list[int] | None = None,
+    n_features: int = 100,
+    epochs: int = 4,
+    batch_size: int = 512,
+    n_threads: int | None = None,
+    n_mpi_procs: int = 4,
+    sync_freq_k: int = 4,
+    seed: int = 42,
+) -> dict[str, Any]:
+    """
+    Eksperyment skalowania wzgledem rozmiaru danych (n_samples od 100k do 5M).
+    Porownuje mediane czasu epoki (bez 1. epoki rozgrzewkowej) dla:
+    - Sequential (CPU, 1 watek)
+    - Numba / OpenMP (CPU wielowatkowy)
+    - MPI (Local SGD na wielu procesach przez mpiexec, lub fallback)
+    - CUDA (GPU - uruchamiane tylko gdy dostepne jest fizyczne GPU NVIDIA)
+    """
+    if sample_sizes is None:
+        sample_sizes = [100_000, 500_000, 1_000_000, 5_000_000]
+
+    max_cores = os.cpu_count() or 4
+    if n_threads is None:
+        n_threads = min(8, max_cores)
+
+    mpiexec_bin = shutil.which("mpiexec")
+    cuda_ok, cuda_device_name = has_physical_cuda_gpu()
+    train_cuda_fn = None
+    if cuda_ok:
+        from cuda_sgd import train_cuda_sgd
+        train_cuda_fn = train_cuda_sgd
+
+    print(
+        f"\n--- Eksperyment: Skalowanie wzgledem rozmiaru danych "
+        f"(sizes={sample_sizes}, features={n_features}, epochs={epochs}, batch={batch_size}) ---"
+    )
+    print(
+        f"Konfiguracja: Numba={n_threads}T | "
+        f"MPI={n_mpi_procs}P ({'mpiexec' if mpiexec_bin else 'symulator'}) | "
+        f"CUDA={cuda_device_name if cuda_ok else 'brak fizycznego GPU (pominieto)'}"
+    )
+
+    rows: list[dict[str, Any]] = []
+    mpi_backend_used = "mpiexec" if mpiexec_bin else "simulator"
+
+    for n_samples in sample_sizes:
+        print(f"\n[Rozmiar n={n_samples:,}] Generowanie danych...")
+        X_syn, y_syn = generate_synthetic_dataset(
+            n_samples=n_samples,
+            n_features=n_features,
+            seed=seed,
+            dtype=np.float32,
+        )
+        X_data = add_intercept(X_syn)
+        del X_syn
+        mem_mb = float((X_data.nbytes + y_syn.nbytes) / (1024 ** 2))
+
+        # 1. Sequential
+        _, hist_seq = train_sequential_sgd(
+            X_data,
+            y_syn,
+            epochs=epochs,
+            batch_size=batch_size,
+            learning_rate=0.01,
+            seed=seed,
+            verbose=False,
+        )
+        t_seq = _median_epoch_time(hist_seq["epoch_times"])
+
+        # 2. Numba (OpenMP)
+        set_num_threads(n_threads)
+        _, hist_numba = train_numba_sgd(
+            X_data,
+            y_syn,
+            epochs=epochs,
+            batch_size=batch_size,
+            learning_rate=0.01,
+            seed=seed,
+            verbose=False,
+        )
+        t_numba = _median_epoch_time(hist_numba["epoch_times"])
+
+        # 3. MPI
+        t_mpi: float | None = None
+        if mpiexec_bin:
+            with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tf:
+                hist_file = tf.name
+            try:
+                cmd = [
+                    mpiexec_bin,
+                    "--oversubscribe",
+                    "-n", str(n_mpi_procs),
+                    sys.executable,
+                    str(SRC_DIR / "main.py"),
+                    "--mode", "mpi",
+                    "--synthetic-samples", str(n_samples),
+                    "--synthetic-features", str(n_features),
+                    "--test-size", "0",
+                    "--epochs", str(epochs),
+                    "--batch-size", str(batch_size),
+                    "--k", str(sync_freq_k),
+                    "--seed", str(seed),
+                    "--save-history", hist_file,
+                    "--quiet",
+                ]
+                res = subprocess.run(cmd, cwd=REPO_ROOT, env=_mpi_subprocess_env(), capture_output=True, text=True, timeout=300)
+                if res.returncode != 0:
+                    raise RuntimeError(f"mpiexec error {res.returncode}: {res.stderr}")
+                with open(hist_file, "r", encoding="utf-8") as f:
+                    hist_mpi = json.load(f)
+                t_mpi = _median_epoch_time(hist_mpi.get("epoch_times", []))
+            except Exception as exc:
+                print(f"[Warn] Blad mpiexec dla n={n_samples}: {exc}. Przelaczam na symulator.")
+                mpi_backend_used = "simulator"
+            finally:
+                if os.path.exists(hist_file):
+                    os.remove(hist_file)
+
+        if t_mpi is None:
+            t0 = time.perf_counter()
+            simulate_local_sgd_multiprocess(
+                X_data,
+                y_syn,
+                n_workers=n_mpi_procs,
+                epochs=epochs,
+                batch_size=batch_size,
+                learning_rate=0.01,
+                sync_freq_k=sync_freq_k,
+                seed=seed,
+            )
+            t_mpi = (time.perf_counter() - t0) / epochs
+
+        # 4. CUDA (tylko jesli jest fizyczne GPU)
+        t_cuda: float | None = None
+        if cuda_ok and train_cuda_fn is not None:
+            _, hist_cuda = train_cuda_fn(
+                X_data,
+                y_syn,
+                epochs=epochs,
+                batch_size=batch_size,
+                learning_rate=0.01,
+                seed=seed,
+                verbose=False,
+            )
+            t_cuda = _median_epoch_time(hist_cuda["epoch_times"])
+
+        speedup_numba = t_seq / t_numba if t_numba > 0 else 0.0
+        speedup_mpi = t_seq / t_mpi if t_mpi > 0 else 0.0
+        speedup_cuda = (t_seq / t_cuda) if (t_cuda is not None and t_cuda > 0) else None
+
+        cuda_str = f"{t_cuda:.4f}s ({speedup_cuda:.2f}x)" if t_cuda is not None else "N/A"
+        print(
+            f"n={n_samples:8d} ({mem_mb:6.1f} MB) | "
+            f"Seq: {t_seq:.4f}s | Numba({n_threads}T): {t_numba:.4f}s ({speedup_numba:.2f}x) | "
+            f"MPI({n_mpi_procs}P): {t_mpi:.4f}s ({speedup_mpi:.2f}x) | CUDA: {cuda_str}"
+        )
+
+        rows.append({
+            "n_samples": int(n_samples),
+            "n_features": int(n_features + 1),
+            "memory_mb": round(mem_mb, 2),
+            "seq_epoch_time": t_seq,
+            "numba_epoch_time": t_numba,
+            "mpi_epoch_time": t_mpi,
+            "cuda_epoch_time": t_cuda,
+            "speedup_numba": speedup_numba,
+            "speedup_mpi": speedup_mpi,
+            "speedup_cuda": speedup_cuda,
+        })
+
+        del X_data, y_syn
+        gc.collect()
+
+    return {
+        "sample_sizes": sample_sizes,
+        "n_features": n_features + 1,
+        "epochs": epochs,
+        "batch_size": batch_size,
+        "numba_threads": n_threads,
+        "mpi_processes": n_mpi_procs,
+        "mpi_backend": mpi_backend_used,
+        "cuda_available": cuda_ok,
+        "cuda_device_name": cuda_device_name,
+        "results": rows,
+    }
+
+
 def run_full_benchmark_suite(
     output_path: Path | None = None,
     use_synthetic_for_accuracy: bool = True,
     seed: int = 42,
+    sample_sizes: list[int] | None = None,
+    data_scaling_features: int = 100,
 ) -> dict[str, Any]:
     """
     Glowna funkcja uruchamiajaca caly zestaw pomiarow i zapisujaca wyniki do pliku JSON.
@@ -491,6 +723,15 @@ def run_full_benchmark_suite(
         seed=seed,
     )
 
+    # 4. Skalowanie wzgledem rozmiaru danych (seq, Numba, MPI, CUDA)
+    data_size_data = benchmark_data_size_scaling(
+        sample_sizes=sample_sizes,
+        n_features=data_scaling_features,
+        epochs=4,
+        batch_size=512,
+        seed=seed,
+    )
+
     full_report = {
         "metadata": {
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -506,6 +747,7 @@ def run_full_benchmark_suite(
         "openmp_benchmark": openmp_data,
         "mpi_benchmark": mpi_data,
         "batch_k_sensitivity": batch_k_data,
+        "data_size_scaling": data_size_data,
     }
 
     with open(output_path, "w", encoding="utf-8") as f:
@@ -515,5 +757,72 @@ def run_full_benchmark_suite(
     return full_report
 
 
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Benchmarki wydajnosciowe PRiR")
+    parser.add_argument(
+        "--only-data-scaling",
+        action="store_true",
+        help="Uruchamia tylko eksperyment skalowania rozmiaru danych i aktualizuje benchmark_results.json",
+    )
+    parser.add_argument(
+        "--sizes",
+        type=int,
+        nargs="+",
+        default=[100_000, 500_000, 1_000_000, 5_000_000],
+        help="Lista rozmiarow n_samples do eksperymentu skalowania danych",
+    )
+    parser.add_argument(
+        "--features",
+        type=int,
+        default=100,
+        help="Liczba cech syntetycznych w eksperymencie skalowania danych",
+    )
+    parser.add_argument(
+        "--epochs",
+        type=int,
+        default=4,
+        help="Liczba epok w eksperymencie skalowania danych (1. epoka odrzucana jako warm-up)",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=512,
+        help="Wielkosc mini-batcha w eksperymencie skalowania danych",
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default=str(REPO_ROOT / "reports" / "benchmark_results.json"),
+        help="Sciezka do pliku wynikowego JSON",
+    )
+    args = parser.parse_args()
+    output_path = Path(args.output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if args.only_data_scaling:
+        data_size_data = benchmark_data_size_scaling(
+            sample_sizes=args.sizes,
+            n_features=args.features,
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+        )
+        if output_path.is_file():
+            with open(output_path, "r", encoding="utf-8") as f:
+                report = json.load(f)
+        else:
+            report = {"metadata": {"timestamp": time.strftime("%Y-%m-%d %H:%M:%S"), "hardware": get_hardware_info()}}
+        report["data_size_scaling"] = data_size_data
+        report.setdefault("metadata", {})["data_scaling_updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(report, f, indent=2, ensure_ascii=False)
+        print(f"\n[OK] Zaktualizowano data_size_scaling w: {output_path}")
+    else:
+        run_full_benchmark_suite(
+            output_path=output_path,
+            sample_sizes=args.sizes,
+            data_scaling_features=args.features,
+        )
+
+
 if __name__ == "__main__":
-    run_full_benchmark_suite()
+    main()
