@@ -10,24 +10,45 @@ from src.math_utils import SIGMOID_CLIP, compute_bce_loss
 from src.sequential_sgd import compute_accuracy, predict_proba, generate_synthetic_dataset
 
 
+# Rozmiar linii cache L1/L2 (128 B na Apple Silicon / 64 B na x86) wyrazony w liczbie float32 (32 * 4B = 128B).
+# Wyrownanie (padding) wierszy bufora prywatnego do 32 elementow eliminuje False Sharing na granicy wierszy watkow.
+CACHE_LINE_FLOATS = 32
+
+
+def allocate_padded_local_grads(
+    n_threads: int,
+    n_features: int,
+    dtype: Any = np.float32,
+) -> NDArray[Any]:
+    """
+    Alokuje dwuwymiarowy bufor akumulatorow watkow z drugim wymiarem wyrownanym (padded)
+    do wielokrotnosci linii cache (128 B = 32 x float32), aby wyeliminowac False Sharing
+    rowniez na styku konca wiersza watku `tid` i poczatku wiersza watku `tid + 1`.
+    """
+    padded_cols = ((n_features + CACHE_LINE_FLOATS - 1) // CACHE_LINE_FLOATS) * CACHE_LINE_FLOATS
+    return np.zeros((max(1, n_threads), max(CACHE_LINE_FLOATS, padded_cols)), dtype=dtype)
+
+
 @njit(parallel=True)
-def compute_gradient_numba(
+def _compute_gradient_numba_into(
     X: NDArray[Any],
     y_true: NDArray[Any],
     weights: NDArray[Any],
-) -> NDArray[Any]:
+    local_grads: NDArray[Any],
+    grad: NDArray[Any],
+) -> None:
     """
-    Rownolegle obliczenie wektora gradientu na wielordzeniowym CPU przy uzyciu Numby (@njit(parallel=True)).
-    Wykorzystuje wzorzec Map-Reduce oraz bufory prywatne dla watkow (thread-local accumulators),
-    aby wyeliminowac wyscigi watkow (Race Conditions) i False Sharing w pamieci podrecznej L1/L2 CPU.
+    Niskopoziomowy kernel Map-Reduce operujacy na pre-alokowanych buforach `local_grads`
+    (z paddingiem linii cache) oraz `grad` (brak alokacji na stercie wewnatrz petli mini-batchy).
     """
     batch_size = X.shape[0]
     n_features = X.shape[1]
-    n_threads = get_num_threads()
+    n_threads = local_grads.shape[0]
 
-    # Lokalna tablica akumulujaca dla kazdego watku (wzorzec Map):
-    # Wiersz `tid` nalezy wylacznie do watku o identyfikatorze `tid`.
-    local_grads = np.zeros((n_threads, n_features), dtype=X.dtype)
+    # Zerowanie wylacznie aktywnych kolumn w pre-alokowanym buforze prywatnym
+    for t in range(n_threads):
+        for j in range(n_features):
+            local_grads[t, j] = 0.0
 
     # Faza MAP: Rownolegla iteracja po wierszach mini-batcha za pomoca prange
     for i in prange(batch_size):
@@ -49,18 +70,31 @@ def compute_gradient_numba(
         y_pred_i = 1.0 / (1.0 + np.exp(-z_safe))
         err_i = y_pred_i - y_true[i]
 
-        # 3. Akumulacja wkładu próbki `i` do prywatnego bufora bieżącego wątku `tid`
+        # 3. Akumulacja wkladu probki `i` do wyrownanego (padded) wiersza biezacego watku `tid`
         for j in range(n_features):
             local_grads[tid, j] += err_i * X[i, j]
 
     # Faza REDUCE: Bezpieczna redukcja prywatnych buforow watkow do wynikowego wektora gradientu
-    grad = np.zeros(n_features, dtype=X.dtype)
     for j in range(n_features):
         acc = 0.0
         for t in range(n_threads):
             acc += local_grads[t, j]
         grad[j] = acc / batch_size
 
+
+def compute_gradient_numba(
+    X: NDArray[Any],
+    y_true: NDArray[Any],
+    weights: NDArray[Any],
+) -> NDArray[Any]:
+    """
+    Rownolegle obliczenie wektora gradientu na wielordzeniowym CPU przy uzyciu Numby (@njit(parallel=True)).
+    Wykorzystuje wzorzec Map-Reduce oraz wyrownane do linii cache (128 B) bufory prywatne watkow.
+    """
+    n_features = X.shape[1]
+    local_grads = allocate_padded_local_grads(get_num_threads(), n_features, dtype=X.dtype)
+    grad = np.zeros(n_features, dtype=X.dtype)
+    _compute_gradient_numba_into(X, y_true, weights, local_grads, grad)
     return grad
 
 
@@ -83,9 +117,17 @@ def train_numba_sgd(
     n_samples, n_features = X_train.shape
 
     weights = np.zeros(n_features, dtype=X_train.dtype)
+    local_grads = allocate_padded_local_grads(get_num_threads(), n_features, dtype=X_train.dtype)
+    grad = np.zeros(n_features, dtype=X_train.dtype)
 
     # Rozgrzewka kompilatora JIT (warm-up) na malym wycinku przed pomiarem czasu epok
-    _ = compute_gradient_numba(X_train[: min(8, n_samples)], y_train[: min(8, n_samples)], weights)
+    _compute_gradient_numba_into(
+        X_train[: min(8, n_samples)],
+        y_train[: min(8, n_samples)],
+        weights,
+        local_grads,
+        grad,
+    )
 
     history: dict[str, list[float]] = {
         "loss": [],
@@ -103,13 +145,13 @@ def train_numba_sgd(
         X_shuffled = X_train[indices]
         y_shuffled = y_train[indices]
 
-        # 2. Dzielenie na Mini-Batche -> Rownolegly Gradient (Numba) -> Aktualizacja Wag
+        # 2. Dzielenie na Mini-Batche -> Rownolegly Gradient (Numba, pre-alokowane bufory) -> Aktualizacja Wag
         for start_idx in range(0, n_samples, batch_size):
             end_idx = start_idx + batch_size
             X_batch = X_shuffled[start_idx:end_idx]
             y_batch = y_shuffled[start_idx:end_idx]
 
-            grad = compute_gradient_numba(X_batch, y_batch, weights)
+            _compute_gradient_numba_into(X_batch, y_batch, weights, local_grads, grad)
             weights = weights - learning_rate * grad
 
         # Zegar epoki obejmuje wylacznie matematyke SGD (bez ewaluacji ponizej)

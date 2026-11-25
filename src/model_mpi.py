@@ -30,6 +30,18 @@ from src.math_utils import sigmoid, compute_bce_loss
 from src.sequential_sgd import compute_accuracy, predict_proba, generate_synthetic_dataset
 
 
+def slice_bounds_for_rank(global_bs: int, rank: int, size: int) -> tuple[int, int]:
+    """
+    Wyznacza przedzial [start, end) indeksow w obrebie globalnego mini-batcha
+    dla procesu o identyfikatorze `rank` z `size` procesow.
+    """
+    base = global_bs // size
+    rem = global_bs % size
+    start = rank * base + min(rank, rem)
+    end = start + base + (1 if rank < rem else 0)
+    return start, end
+
+
 def split_batch_for_rank(
     X_batch: NDArray[Any],
     y_batch: NDArray[Any],
@@ -42,13 +54,7 @@ def split_batch_for_rank(
     Obsluguje rowniez przypadek, gdy rozmiar ostatniego mini-batcha nie dzieli sie
     calkowicie przez liczbe procesow `size`.
     """
-    global_bs = X_batch.shape[0]
-    base = global_bs // size
-    rem = global_bs % size
-
-    start = rank * base + min(rank, rem)
-    end = start + base + (1 if rank < rem else 0)
-
+    start, end = slice_bounds_for_rank(X_batch.shape[0], rank, size)
     return X_batch[start:end], y_batch[start:end]
 
 
@@ -93,19 +99,20 @@ def train_mpi_sgd(
     for epoch in range(1, epochs + 1):
         t0 = time.perf_counter()
 
+        # Tasujemy wylacznie indeksy (kazdy proces wycina w RAM tylko swoje lokalne 1/P wierszy)
         indices = rng.permutation(n_samples)
-        X_shuffled = X_train[indices]
-        y_shuffled = y_train[indices]
 
         for start_idx in range(0, n_samples, batch_size):
-            end_idx = start_idx + batch_size
-            X_global_batch = X_shuffled[start_idx:end_idx]
-            y_global_batch = y_shuffled[start_idx:end_idx]
-            current_global_bs = X_global_batch.shape[0]
+            end_idx = min(start_idx + batch_size, n_samples)
+            batch_indices = indices[start_idx:end_idx]
+            current_global_bs = batch_indices.shape[0]
 
-            X_local, y_local = split_batch_for_rank(X_global_batch, y_global_batch, rank, size)
+            loc_start, loc_end = slice_bounds_for_rank(current_global_bs, rank, size)
+            local_idx = batch_indices[loc_start:loc_end]
 
-            if X_local.shape[0] > 0:
+            if local_idx.shape[0] > 0:
+                X_local = X_train[local_idx]
+                y_local = y_train[local_idx]
                 y_pred_local = sigmoid(X_local @ weights)
                 error_local = y_pred_local - y_local
                 local_grad_sum[:] = X_local.T @ error_local
@@ -282,16 +289,17 @@ def train_local_sgd_mpi(
     for epoch in range(1, epochs + 1):
         t0 = time.perf_counter()
 
+        # Tasujemy wylacznie indeksy (brak pelnej kopii macierzy X_train w kazdym procesie)
         indices = rng.permutation(n_samples)
-        X_shuffled = X_train[indices]
-        y_shuffled = y_train[indices]
 
         for start_idx in range(0, n_samples, batch_size):
-            end_idx = start_idx + batch_size
-            X_global_batch = X_shuffled[start_idx:end_idx]
-            y_global_batch = y_shuffled[start_idx:end_idx]
+            end_idx = min(start_idx + batch_size, n_samples)
+            batch_indices = indices[start_idx:end_idx]
+            loc_start, loc_end = slice_bounds_for_rank(batch_indices.shape[0], rank, size)
+            local_idx = batch_indices[loc_start:loc_end]
 
-            X_local, y_local = split_batch_for_rank(X_global_batch, y_global_batch, rank, size)
+            X_local = X_train[local_idx]
+            y_local = y_train[local_idx]
 
             # 1-2. Lokalny krok gradientowy i aktualizacja wag (brak komunikacji sieciowej)
             weights = local_sgd_step(X_local, y_local, weights, learning_rate)

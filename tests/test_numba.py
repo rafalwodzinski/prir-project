@@ -2,7 +2,7 @@ import numpy as np
 
 from src.math_utils import sigmoid, compute_gradient
 from src.sequential_sgd import add_intercept, generate_synthetic_dataset, train_sequential_sgd
-from src.numba_sgd import compute_gradient_numba, train_numba_sgd
+from src.numba_sgd import CACHE_LINE_FLOATS, allocate_padded_local_grads, compute_gradient_numba, train_numba_sgd
 
 
 def test_numba_gradient_matches_vectorized_gradient():
@@ -69,4 +69,18 @@ def test_numba_parallel_weights_match_baseline_after_10_epochs():
     assert np.allclose(weights_numba, weights_baseline, atol=1e-5)
     assert np.allclose(history_numba["loss"], history_baseline["loss"], atol=1e-5)
     assert np.allclose(history_numba["accuracy"], history_baseline["accuracy"], atol=1e-5)
+
+
+def test_numba_cache_line_padding_alignment():
+    """
+    Sprawdza, ze pre-alokowany bufor akumulatorow watkow wyrownuje drugi wymiar
+    do wielokrotnosci linii cache (128 B = 32 x float32), eliminujac False Sharing na granicach wierszy.
+    """
+    buf_small = allocate_padded_local_grads(n_threads=4, n_features=13, dtype=np.float32)
+    assert buf_small.shape == (4, CACHE_LINE_FLOATS)
+    assert (buf_small.strides[0] % 128) == 0
+
+    buf_csgo = allocate_padded_local_grads(n_threads=8, n_features=104, dtype=np.float32)
+    assert buf_csgo.shape == (8, 128)
+    assert (buf_csgo.strides[0] % 128) == 0
 
