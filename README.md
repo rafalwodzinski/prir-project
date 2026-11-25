@@ -292,6 +292,20 @@ $$\text{np.allclose}(grad\_analityczny, grad\_numeryczny, atol=1e-5) \implies \m
 
 Szczegółowe metadane sprzętowe (CPU, model GPU, wersje bibliotek oraz data) zapisywane są automatycznie w sekcji `"metadata"` / `"environment"` każdego pliku wynikowego JSON w `reports/`.
 
+### Metodologia pomiaru czasu (porównywalność wariantów)
+
+Wszystkie warianty CPU (`Sequential`, `OpenMP / Numba`, `MPI`) w `scripts/run_benchmarks.py` raportują **tę samą metrykę**: medianę z 5 pomiarów (po 1 przebiegu rozgrzewkowym) **sumy `epoch_times`**, obejmującą wyłącznie matematykę epok SGD i synchronizację — **bez** wczytywania CSV, bez jednorazowej kompilacji JIT i bez ewaluacji `predict_proba`:
+
+| Wariant | Co obejmuje zegar `epoch_times` | Co jest wykluczone z pomiaru |
+|---|---|---|
+| **Sequential (NumPy)** | Tasowanie indeksów + pętla mini-batch SGD (`X @ w`, `X.T @ err` przez BLAS) + aktualizacja wag | Wczytanie/skalowanie danych, ewaluacja `predict_proba` / `BCE` |
+| **OpenMP / Numba** | Tasowanie indeksów + równoległy kernel `compute_gradient_numba` (`prange`, Map-Reduce) + aktualizacja wag | Kompilacja JIT (wykonana w rozgrzewce), I/O, ewaluacja |
+| **MPI (`mpiexec`)** | Tasowanie indeksów + podział batcha + lokalne SGD (NumPy) + `comm.Allreduce` co $K$ kroków (mierzone na `rank=0`) | Uruchomienie `mpiexec`, I/O danych, ewaluacja |
+| **CUDA (GPU)** | Przesłanie lekkiej tablicy indeksów `int32` + 3 kernele GPU, otoczone `cuda.synchronize()` | Jednorazowy transfer `X, y` do VRAM, 1. epoka (JIT), `copy_to_host` wag i ewaluacja |
+
+> **Dlaczego $T_1$ Numby (`0.150 s`) jest wyższe od $T_1$ MPI (`0.0385 s`) mimo identycznego zakresu pomiaru?**  
+> Na 1 wątku kernel Numby wykonuje jawne zagnieżdżone pętle skalarne po wierszach i cechach, natomiast `Sequential` i `MPI` (dla $p=1$) korzystają ze zwektoryzowanych operacji macierzowych BLAS/Accelerate w NumPy (`X @ weights`, `X.T @ error`). Dzięki ujednoliceniu zakresu oba czasy są w pełni porównywalne na jednym wykresie (`figures/scaling_comparison.png`).
+
 ### 1. Przyspieszenie i efektywność (CS:GO vs `T_seq` i Prawo Amdahla)
 * Na zbiorze CS:GO (~98 tys. próbek × 104 cechy, `batch=512`) bazowa wersja sekwencyjna NumPy wykonuje 3 epoki w **`T_seq = 0.0346 s`**.
 * Dla tak niewielkiego kosztu obliczeniowego na krok narzut uruchamiania wątków (`prange`) i komunikacji międzyprocesowej (`mpiexec`) przewyższa zysk ze zrównoleglenia: względem `T_seq` OpenMP/Numba osiąga `0.20x–0.24x`, a MPI `0.52x–0.90x`. Pokazuje to wprost ograniczenia Prawa Amdahla dla problemów o niskiej intensywności obliczeniowej.
