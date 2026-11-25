@@ -301,7 +301,8 @@ def benchmark_mpi_scaling(
     mpiexec_bin = shutil.which("mpiexec")
     backend_desc = "Rzeczywiste mpiexec" if mpiexec_bin else "Fallback symulator"
     backend_used = "mpiexec" if mpiexec_bin else "simulator"
-    print(f"\n--- Benchmark MPI / Local SGD Scaling ({backend_desc}, procesy: {process_counts}, K={sync_freq_k}) ---")
+    variant_label = "MPI Sync (K=1, Allreduce grad)" if sync_freq_k <= 1 else f"MPI Local-SGD (K={sync_freq_k})"
+    print(f"\n--- Benchmark {variant_label} ({backend_desc}, procesy: {process_counts}) ---")
     results_by_procs: dict[int, dict[str, Any]] = {}
 
     for p in process_counts:
@@ -396,6 +397,7 @@ def benchmark_mpi_scaling(
 
     result: dict[str, Any] = {
         "process_counts": process_counts,
+        "sync_freq_k": sync_freq_k,
         "backend": backend_used,
         "timing_scope": TIMING_SCOPE_DESC,
         "results": {str(k): v for k, v in results_by_procs.items()},
@@ -537,6 +539,144 @@ def benchmark_batch_and_k_sensitivity(
         "batch_sizes": batch_sizes,
         "k_values": k_values,
         "grid_results": grid_results,
+    }
+
+
+def benchmark_local_sgd_convergence(
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    X_test: np.ndarray | None = None,
+    y_test: np.ndarray | None = None,
+    k_values: list[int] | None = None,
+    epochs: int = 15,
+    batch_size: int = 256,
+    learning_rate: float = 0.05,
+    n_procs: int = 4,
+    seed: int = 42,
+    use_real_mpi: bool = True,
+) -> dict[str, Any]:
+    """
+    Kontrola zmiany zbieznosci wariantu rzadziej synchronizowanego (zakres 2-osobowy D09):
+    Porownuje przebieg Loss i Test Accuracy w funkcji epok oraz liczbe operacji Allreduce
+    dla K in {1 (Sync SGD), 4, 16, 64} na rzeczywistych procesach MPI (lub w symulacji).
+    """
+    if k_values is None:
+        k_values = [1, 4, 16, 64]
+
+    mpiexec_bin = shutil.which("mpiexec") if use_real_mpi else None
+    csgo_p = REPO_ROOT / "data" / "csgo_round_snapshots.csv"
+    can_use_mpiexec = bool(mpiexec_bin and csgo_p.is_file() and X_train.shape[0] > 5000)
+    backend_used = "mpiexec" if can_use_mpiexec else "simulator"
+
+    print(
+        f"\n--- Eksperyment: Kontrola zbieznosci Local SGD ({backend_used}, {n_procs}P, "
+        f"K={k_values}, epochs={epochs}, batch={batch_size}, lr={learning_rate}) ---"
+    )
+
+    n_samples, n_features = X_train.shape
+    batches_per_epoch = (n_samples + batch_size - 1) // batch_size
+    series: dict[str, Any] = {}
+
+    for k in k_values:
+        hist_data: dict[str, Any] | None = None
+        if can_use_mpiexec and mpiexec_bin:
+            with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tf:
+                hist_file = tf.name
+            try:
+                cmd = [
+                    mpiexec_bin,
+                    "--oversubscribe",
+                    "-n", str(n_procs),
+                    sys.executable,
+                    "-m", "src.main",
+                    "--mode", "mpi",
+                    "--k", str(k),
+                    "--epochs", str(epochs),
+                    "--batch-size", str(batch_size),
+                    "--lr", str(learning_rate),
+                    "--seed", str(seed),
+                    "--data", str(csgo_p),
+                    "--save-history", hist_file,
+                    "--quiet",
+                ]
+                res = subprocess.run(cmd, cwd=REPO_ROOT, env=_mpi_subprocess_env(), capture_output=True, text=True, timeout=120)
+                if res.returncode != 0:
+                    raise RuntimeError(f"mpiexec error {res.returncode}: {res.stderr}")
+                with open(hist_file, "r", encoding="utf-8") as f:
+                    hist_data = json.load(f)
+            except Exception as exc:
+                print(f"[Warn] Blad mpiexec dla K={k} ({exc}), przelaczam na symulator.")
+                backend_used = "simulator"
+                hist_data = None
+            finally:
+                if os.path.exists(hist_file):
+                    os.remove(hist_file)
+
+        if hist_data is None:
+            # Fallback symulacyjny (np. w testach jednostkowych na malych macierzach)
+            from src.math_utils import compute_bce_loss
+            rng = np.random.default_rng(seed)
+            worker_weights = [np.zeros(n_features, dtype=X_train.dtype) for _ in range(n_procs)]
+            step_counter = 0
+            sync_total = 0
+            losses, accs, val_losses, val_accs, ep_times = [], [], [], [], []
+            for _ in range(epochs):
+                t0 = time.perf_counter()
+                idx = rng.permutation(n_samples)
+                step_counter, s_ep = run_local_sgd_epoch_simulated(
+                    X_train[idx], y_train[idx], worker_weights,
+                    batch_size=batch_size, learning_rate=learning_rate,
+                    sync_freq_k=k, step_counter=step_counter,
+                )
+                sync_total += s_ep
+                ep_times.append(time.perf_counter() - t0)
+                w_eval = worker_weights[0]
+                tr_p = predict_proba(X_train, w_eval)
+                losses.append(compute_bce_loss(y_train, tr_p))
+                accs.append(compute_accuracy(y_train, tr_p))
+                if X_test is not None and y_test is not None:
+                    te_p = predict_proba(X_test, w_eval)
+                    val_losses.append(compute_bce_loss(y_test, te_p))
+                    val_accs.append(compute_accuracy(y_test, te_p))
+            hist_data = {
+                "loss": losses,
+                "accuracy": accs,
+                "val_loss": val_losses,
+                "val_accuracy": val_accs,
+                "epoch_times": ep_times,
+                "sync_count": sync_total,
+            }
+
+        # Dla K=1 (train_mpi_sgd) Allreduce wykonywane jest po kazdym pojedynczym mini-batchu
+        sync_count = int(hist_data.get("sync_count", epochs * batches_per_epoch if k <= 1 else 0))
+        total_t = float(sum(hist_data.get("epoch_times", [])))
+        final_loss = float(hist_data["loss"][-1])
+        final_val_acc = float(hist_data["val_accuracy"][-1]) if hist_data.get("val_accuracy") else float(hist_data["accuracy"][-1])
+
+        print(
+            f"K={k:2d} ({'Sync' if k <= 1 else 'Local'}) | Allreduce: {sync_count:5d} | "
+            f"Loss: {final_loss:.4f} | Test Acc: {final_val_acc * 100:.2f}% | Suma epok: {total_t:.4f}s"
+        )
+
+        series[str(k)] = {
+            "k": k,
+            "mode": "sync_grad_allreduce" if k <= 1 else "local_sgd_weight_allreduce",
+            "sync_count": sync_count,
+            "total_epoch_time": total_t,
+            "loss": [float(x) for x in hist_data.get("loss", [])],
+            "accuracy": [float(x) for x in hist_data.get("accuracy", [])],
+            "val_loss": [float(x) for x in hist_data.get("val_loss", [])],
+            "val_accuracy": [float(x) for x in hist_data.get("val_accuracy", [])],
+        }
+
+    return {
+        "backend": backend_used,
+        "n_processes": n_procs,
+        "epochs": epochs,
+        "batch_size": batch_size,
+        "learning_rate": learning_rate,
+        "k_values": k_values,
+        "results": series,
     }
 
 
@@ -810,7 +950,19 @@ def run_full_benchmark_suite(
         baseline_seq_time=t_seq,
     )
 
-    # 2. Benchmark MPI Scaling
+    # 2a. Benchmark MPI Sync Scaling (K=1, redukcja gradientow po kazdym batchu zgodnie ze specyfikacja D09)
+    mpi_sync_data = benchmark_mpi_scaling(
+        X_scale,
+        y_scale,
+        process_counts=[1, 2, 4, 8],
+        epochs=3,
+        batch_size=512,
+        sync_freq_k=1,
+        seed=seed,
+        baseline_seq_time=t_seq,
+    )
+
+    # 2b. Benchmark MPI Local-SGD Scaling (K=4, rzadka redukcja wag)
     mpi_data = benchmark_mpi_scaling(
         X_scale,
         y_scale,
@@ -822,7 +974,7 @@ def run_full_benchmark_suite(
         baseline_seq_time=t_seq,
     )
 
-    # 3. Analiza Batch Size i parametru K na czas osiagniecia 74% accuracy (dane CS:GO, ewaluacja train + test)
+    # 3a. Analiza Batch Size i parametru K na czas osiagniecia 74% accuracy (dane CS:GO, ewaluacja train + test)
     batch_k_data = benchmark_batch_and_k_sensitivity(
         X_scale,
         y_scale,
@@ -834,6 +986,20 @@ def run_full_benchmark_suite(
         max_epochs=20,
         n_workers=4,
         learning_rate=0.003,
+        seed=seed,
+    )
+
+    # 3b. Kontrola zmiany zbieznosci w funkcji K na rzeczywistych procesach MPI (zakres 2-osobowy D09)
+    convergence_data = benchmark_local_sgd_convergence(
+        X_scale,
+        y_scale,
+        X_test=X_scale_test,
+        y_test=y_scale_test,
+        k_values=[1, 4, 16, 64],
+        epochs=15,
+        batch_size=256,
+        learning_rate=0.05,
+        n_procs=4,
         seed=seed,
     )
 
@@ -871,8 +1037,10 @@ def run_full_benchmark_suite(
         },
         "sequential_baseline": seq_data,
         "openmp_benchmark": openmp_data,
+        "mpi_sync_benchmark": mpi_sync_data,
         "mpi_benchmark": mpi_data,
         "batch_k_sensitivity": batch_k_data,
+        "local_sgd_convergence": convergence_data,
     }
     if data_size_data is not None:
         full_report["data_size_scaling"] = data_size_data

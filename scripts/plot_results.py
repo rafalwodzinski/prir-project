@@ -71,6 +71,7 @@ def plot_speedup_and_efficiency(
 
     openmp = benchmark_data.get("openmp_benchmark", {})
     mpi = benchmark_data.get("mpi_benchmark", {})
+    mpi_sync = benchmark_data.get("mpi_sync_benchmark", {})
     seq_base = benchmark_data.get("sequential_baseline", {})
     t_seq = seq_base.get("median_time")
 
@@ -87,6 +88,14 @@ def plot_speedup_and_efficiency(
     has_mpi_seq = all("speedup_vs_seq" in mpi["results"][str(p)] for p in mpi_procs)
     mpi_speedup_seq = [mpi["results"][str(p)]["speedup_vs_seq"] for p in mpi_procs] if has_mpi_seq else []
     mpi_eff_seq = [mpi["results"][str(p)]["efficiency_vs_seq"] * 100 for p in mpi_procs] if has_mpi_seq else []
+
+    has_mpi_sync = bool(mpi_sync and mpi_sync.get("results"))
+    sync_procs = [int(p) for p in mpi_sync.get("process_counts", [])] if has_mpi_sync else []
+    sync_speedup = [mpi_sync["results"][str(p)]["speedup"] for p in sync_procs] if has_mpi_sync else []
+    sync_eff = [mpi_sync["results"][str(p)]["efficiency"] * 100 for p in sync_procs] if has_mpi_sync else []
+    has_sync_seq = has_mpi_sync and all("speedup_vs_seq" in mpi_sync["results"][str(p)] for p in sync_procs)
+    sync_speedup_seq = [mpi_sync["results"][str(p)]["speedup_vs_seq"] for p in sync_procs] if has_sync_seq else []
+    sync_eff_seq = [mpi_sync["results"][str(p)]["efficiency_vs_seq"] * 100 for p in sync_procs] if has_sync_seq else []
 
     # Teoretyczne Prawo Amdahla dla Numba/OpenMP (skalowanie wzgledem T_1)
     f_fit = fit_parallel_fraction(omp_threads, omp_speedup)
@@ -126,10 +135,15 @@ def plot_speedup_and_efficiency(
     else:
         ax_s.plot(omp_threads, omp_speedup, "o-", color="#1f77b4", linewidth=2.2, markersize=7, label="OpenMP / Numba CPU")
     if has_mpi_seq:
-        ax_s.plot(mpi_procs, mpi_speedup_seq, "s-", color="#2ca02c", linewidth=2.4, markersize=7, label="MPI / Local SGD vs T_seq")
-        ax_s.plot(mpi_procs, mpi_speedup, "s--", color="#2ca02c", linewidth=1.4, markersize=5, alpha=0.65, label="MPI / Local SGD vs T₁")
+        ax_s.plot(mpi_procs, mpi_speedup_seq, "s-", color="#2ca02c", linewidth=2.4, markersize=7, label="MPI Local-SGD (K=4) vs T_seq")
+        ax_s.plot(mpi_procs, mpi_speedup, "s--", color="#2ca02c", linewidth=1.3, markersize=5, alpha=0.6, label="MPI Local-SGD (K=4) vs T₁")
     else:
         ax_s.plot(mpi_procs, mpi_speedup, "s-", color="#2ca02c", linewidth=2.2, markersize=7, label="MPI / Local SGD")
+    if has_sync_seq:
+        ax_s.plot(sync_procs, sync_speedup_seq, "^-", color="#ff7f0e", linewidth=2.2, markersize=6.5, label="MPI Sync (K=1, grad) vs T_seq")
+        ax_s.plot(sync_procs, sync_speedup, "^--", color="#ff7f0e", linewidth=1.3, markersize=5, alpha=0.6, label="MPI Sync (K=1, grad) vs T₁")
+    elif has_mpi_sync:
+        ax_s.plot(sync_procs, sync_speedup, "^-", color="#ff7f0e", linewidth=2.2, markersize=6.5, label="MPI Sync (K=1, grad)")
 
     ax_s.set_title("Przyspieszenie S(p) w funkcji liczby wątków / procesów", fontsize=12, fontweight="bold")
     ax_s.set_xlabel("Liczba wątków / procesów p [-]", fontsize=11)
@@ -137,28 +151,33 @@ def plot_speedup_and_efficiency(
     ax_s.set_xticks(omp_threads)
     ax_s.set_ylim(bottom=0)
     ax_s.grid(True, linestyle="--", alpha=0.5)
-    ax_s.legend(fontsize=8.5, loc="upper left")
+    ax_s.legend(fontsize=7.8, loc="upper left")
 
     # --- Panel 2: Efektywnosc E(p) ---
     ax_e.axhline(100, color="k", linestyle="--", alpha=0.6, label="Idealna efektywność E(p) = 100%")
     if has_omp_seq:
         ax_e.plot(omp_threads, omp_eff_seq, "o-", color="#1f77b4", linewidth=2.4, markersize=7, label="OpenMP / Numba vs T_seq")
-        ax_e.plot(omp_threads, omp_eff, "o--", color="#1f77b4", linewidth=1.4, markersize=5, alpha=0.65, label="OpenMP / Numba vs T₁")
+        ax_e.plot(omp_threads, omp_eff, "o--", color="#1f77b4", linewidth=1.3, markersize=5, alpha=0.6, label="OpenMP / Numba vs T₁")
     else:
         ax_e.plot(omp_threads, omp_eff, "o-", color="#1f77b4", linewidth=2.2, markersize=7, label="OpenMP / Numba CPU")
     if has_mpi_seq:
-        ax_e.plot(mpi_procs, mpi_eff_seq, "s-", color="#2ca02c", linewidth=2.4, markersize=7, label="MPI / Local SGD vs T_seq")
-        ax_e.plot(mpi_procs, mpi_eff, "s--", color="#2ca02c", linewidth=1.4, markersize=5, alpha=0.65, label="MPI / Local SGD vs T₁")
+        ax_e.plot(mpi_procs, mpi_eff_seq, "s-", color="#2ca02c", linewidth=2.4, markersize=7, label="MPI Local-SGD (K=4) vs T_seq")
+        ax_e.plot(mpi_procs, mpi_eff, "s--", color="#2ca02c", linewidth=1.3, markersize=5, alpha=0.6, label="MPI Local-SGD (K=4) vs T₁")
     else:
         ax_e.plot(mpi_procs, mpi_eff, "s-", color="#2ca02c", linewidth=2.2, markersize=7, label="MPI / Local SGD")
+    if has_sync_seq:
+        ax_e.plot(sync_procs, sync_eff_seq, "^-", color="#ff7f0e", linewidth=2.2, markersize=6.5, label="MPI Sync (K=1, grad) vs T_seq")
+        ax_e.plot(sync_procs, sync_eff, "^--", color="#ff7f0e", linewidth=1.3, markersize=5, alpha=0.6, label="MPI Sync (K=1, grad) vs T₁")
+    elif has_mpi_sync:
+        ax_e.plot(sync_procs, sync_eff, "^-", color="#ff7f0e", linewidth=2.2, markersize=6.5, label="MPI Sync (K=1, grad)")
 
     ax_e.set_title("Efektywność E(p) w funkcji liczby wątków / procesów", fontsize=12, fontweight="bold")
     ax_e.set_xlabel("Liczba wątków / procesów p [-]", fontsize=11)
     ax_e.set_ylabel("Efektywność E(p) [%]", fontsize=11)
     ax_e.set_xticks(omp_threads)
-    ax_e.set_ylim(0, max(110, max(omp_eff_seq + mpi_eff_seq + [100]) * 1.1))
+    ax_e.set_ylim(0, max(110, max(omp_eff_seq + mpi_eff_seq + sync_eff_seq + [100]) * 1.1))
     ax_e.grid(True, linestyle="--", alpha=0.5)
-    ax_e.legend(fontsize=8.5, loc="upper right")
+    ax_e.legend(fontsize=7.8, loc="upper right")
 
     # Podpis ze sprzetem, baseline T_seq i ziarnem losowosci
     seq_info = f" | Baseline T_seq={t_seq:.4f}s" if t_seq is not None else ""
@@ -300,6 +319,7 @@ def plot_execution_time_comparison(
 
     openmp = benchmark_data.get("openmp_benchmark", {})
     mpi = benchmark_data.get("mpi_benchmark", {})
+    mpi_sync = benchmark_data.get("mpi_sync_benchmark", {})
     seq_base = benchmark_data.get("sequential_baseline", {})
     t_seq = seq_base.get("median_time")
 
@@ -309,7 +329,11 @@ def plot_execution_time_comparison(
     mpi_procs = [int(p) for p in mpi.get("process_counts", [1, 2, 4, 8])]
     mpi_times = [mpi["results"][str(p)]["median_time"] for p in mpi_procs]
 
-    fig, ax = plt.subplots(figsize=(8, 5), dpi=300)
+    has_mpi_sync = bool(mpi_sync and mpi_sync.get("results"))
+    sync_procs = [int(p) for p in mpi_sync.get("process_counts", [])] if has_mpi_sync else []
+    sync_times = [mpi_sync["results"][str(p)]["median_time"] for p in sync_procs] if has_mpi_sync else []
+
+    fig, ax = plt.subplots(figsize=(8.5, 5.2), dpi=300)
 
     if t_seq is not None:
         ax.axhline(
@@ -320,12 +344,17 @@ def plot_execution_time_comparison(
             label=f"Sequential baseline (NumPy 1T): T_seq = {t_seq:.3f}s",
         )
     ax.plot(omp_threads, omp_times, "o-", color="#1f77b4", linewidth=2, label="OpenMP / Numba CPU (wątki)")
-    ax.plot(mpi_procs, mpi_times, "s-", color="#2ca02c", linewidth=2, label="MPI / Local SGD (procesy)")
+    if has_mpi_sync:
+        ax.plot(sync_procs, sync_times, "^-", color="#ff7f0e", linewidth=2, label="MPI Sync (K=1, Allreduce gradientów)")
+    ax.plot(mpi_procs, mpi_times, "s-", color="#2ca02c", linewidth=2, label="MPI Local-SGD (K=4, Allreduce wag)")
 
     for t, tm in zip(omp_threads, omp_times):
         ax.annotate(f"{tm:.3f}s", (t, tm), textcoords="offset points", xytext=(0, 6), ha="center", fontsize=8)
     for p, tm in zip(mpi_procs, mpi_times):
-        ax.annotate(f"{tm:.3f}s", (p, tm), textcoords="offset points", xytext=(0, -12), ha="center", fontsize=8)
+        ax.annotate(f"{tm:.3f}s", (p, tm), textcoords="offset points", xytext=(0, -12), ha="center", fontsize=8, color="#1b6e1b")
+    if has_mpi_sync:
+        for p, tm in zip(sync_procs, sync_times):
+            ax.annotate(f"{tm:.3f}s", (p, tm), textcoords="offset points", xytext=(0, 7), ha="center", fontsize=8, color="#b85700")
 
     ax.set_title(
         "Czas wykonania treningu T(p) w funkcji liczby jednostek obliczeniowych\n"
@@ -553,6 +582,84 @@ def plot_data_size_scaling(
     return output_path
 
 
+def plot_local_sgd_convergence(
+    benchmark_data: dict[str, Any],
+    output_path: Path | None = None,
+) -> Path | None:
+    """
+    Wykres kontroli zmiany zbieznosci wariantu rzadziej synchronizowanego (zakres 2-osobowy D09):
+    - Lewy panel: Funkcja straty BCE (Train Loss) w funkcji epoki dla K in {1, 4, 16, 64}
+    - Prawy panel: Dokladnosc na zbiorze testowym (Test Accuracy [%]) oraz liczba wywolan Allreduce
+    """
+    conv = benchmark_data.get("local_sgd_convergence")
+    if not conv or not conv.get("results"):
+        return None
+
+    if output_path is None:
+        output_path = FIGURES_DIR / "local_sgd_convergence.png"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    k_values = conv.get("k_values", sorted(int(k) for k in conv["results"].keys()))
+    n_procs = conv.get("n_processes", 4)
+    backend = conv.get("backend", "mpiexec")
+    lr = conv.get("learning_rate", 0.05)
+    bs = conv.get("batch_size", 256)
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5.2), dpi=300)
+    palette = ["#1f77b4", "#2ca02c", "#ff7f0e", "#d62728", "#9467bd"]
+    markers = ["o", "s", "^", "D", "v"]
+
+    for idx, k in enumerate(k_values):
+        row = conv["results"][str(k)]
+        losses = row.get("loss", [])
+        val_accs = row.get("val_accuracy") or row.get("accuracy", [])
+        syncs = row.get("sync_count", 0)
+        tot_t = row.get("total_epoch_time", 0.0)
+        epochs_x = list(range(1, len(losses) + 1))
+
+        mode_tag = "Sync grad" if k <= 1 else "Local SGD"
+        label = f"K={k} ({mode_tag}) | Allreduce={syncs} | T={tot_t*1000:.0f}ms"
+        color = palette[idx % len(palette)]
+        marker = markers[idx % len(markers)]
+
+        ax1.plot(epochs_x, losses, f"{marker}-", color=color, linewidth=2, markersize=5, label=label)
+        ax2.plot(
+            list(range(1, len(val_accs) + 1)),
+            [a * 100 for a in val_accs],
+            f"{marker}-",
+            color=color,
+            linewidth=2,
+            markersize=5,
+            label=label,
+        )
+
+    ax1.set_title("Kontrola zbieżności: strata BCE w funkcji epok", fontsize=11.5, fontweight="bold")
+    ax1.set_xlabel("Epoka [-]", fontsize=10.5)
+    ax1.set_ylabel("Funkcja straty BCE (Train Loss) [-]", fontsize=10.5)
+    ax1.xaxis.set_major_locator(MaxNLocator(integer=True))
+    ax1.grid(True, linestyle="--", alpha=0.5)
+    ax1.legend(fontsize=8.5)
+
+    ax2.set_title("Jakość generalizacji: Test Accuracy w funkcji epok", fontsize=11.5, fontweight="bold")
+    ax2.set_xlabel("Epoka [-]", fontsize=10.5)
+    ax2.set_ylabel("Test Accuracy [%]", fontsize=10.5)
+    ax2.xaxis.set_major_locator(MaxNLocator(integer=True))
+    ax2.grid(True, linestyle="--", alpha=0.5)
+    ax2.legend(fontsize=8.5, loc="lower right")
+
+    plt.suptitle(
+        f"Wpływ rzadkiej synchronizacji (parametr K) na zbieżność i komunikację Allreduce "
+        f"({backend}, {n_procs}P, batch={bs}, lr={lr})",
+        fontsize=11.5,
+    )
+    plt.tight_layout()
+    plt.savefig(output_path, bbox_inches="tight")
+    plt.close()
+
+    print(f"[OK] Wykres kontroli zbieznosci Local SGD zapisano do: {output_path}")
+    return output_path
+
+
 def main() -> None:
     results_file = REPORTS_DIR / "benchmark_results.json"
     if not results_file.exists():
@@ -567,6 +674,8 @@ def main() -> None:
     plot_execution_time_comparison(data)
     if data.get("data_size_scaling"):
         plot_data_size_scaling(data)
+    if data.get("local_sgd_convergence"):
+        plot_local_sgd_convergence(data)
 
     # Wyniki CUDA (np. z Google Colab) - opcjonalne, jesli pliki historii istnieja
     seq_file = REPORTS_DIR / "colab_seq_history.json"

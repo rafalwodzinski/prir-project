@@ -7,6 +7,7 @@ import pytest
 from scripts.run_benchmarks import (
     benchmark_batch_and_k_sensitivity,
     benchmark_data_size_scaling,
+    benchmark_local_sgd_convergence,
     benchmark_openmp_numba,
     benchmark_sequential_baseline,
     measure_median_time,
@@ -19,6 +20,7 @@ from scripts.plot_results import (
     plot_batch_and_k_analysis,
     plot_execution_time_comparison,
     plot_data_size_scaling,
+    plot_local_sgd_convergence,
     summarize_cuda_vs_seq,
 )
 
@@ -313,3 +315,37 @@ def test_batch_k_sensitivity_reports_test_accuracy(tmp_path: Path):
         output_path=out_png,
     )
     assert out_png.is_file() and out_png.stat().st_size > 1000
+
+
+def test_local_sgd_convergence_runner_and_plot(tmp_path: Path):
+    """
+    Weryfikuje eksperyment kontroli zmiany zbieznosci w funkcji K (K=1 vs K=8)
+    oraz generowanie wykresu local_sgd_convergence.png.
+    """
+    rng = np.random.default_rng(7)
+    X_tr = rng.standard_normal((256, 6), dtype=np.float32)
+    w_true = np.array([1.2, -0.9, 0.6, 0.0, 0.0, 0.0], dtype=np.float32)
+    y_tr = (X_tr @ w_true > 0).astype(np.float32)
+    X_te = rng.standard_normal((64, 6), dtype=np.float32)
+    y_te = (X_te @ w_true > 0).astype(np.float32)
+
+    conv = benchmark_local_sgd_convergence(
+        X_tr,
+        y_tr,
+        X_test=X_te,
+        y_test=y_te,
+        k_values=[1, 8],
+        epochs=4,
+        batch_size=32,
+        learning_rate=0.08,
+        n_procs=2,
+        seed=42,
+        use_real_mpi=False,
+    )
+    assert "1" in conv["results"] and "8" in conv["results"]
+    assert conv["results"]["8"]["sync_count"] < conv["results"]["1"]["sync_count"]
+    assert conv["results"]["1"]["loss"][-1] < conv["results"]["1"]["loss"][0]
+
+    out_conv = tmp_path / "local_sgd_convergence.png"
+    plot_local_sgd_convergence({"local_sgd_convergence": conv}, output_path=out_conv)
+    assert out_conv.is_file() and out_conv.stat().st_size > 1000

@@ -68,9 +68,10 @@ Głównym celem badawczym jest **ocena przyspieszenia $S(p)$ i efektywności $E(
 │   ├── speedup_efficiency.png    # Przyspieszenie S(p) i efektywność E(p) (vs T_seq i vs T₁) oraz Prawo Amdahla
 │   ├── scaling_comparison.png    # Porównanie czasów epok w funkcji liczby rdzeni/procesów vs baseline T_seq
 │   ├── batch_k_analysis.png      # Czas do jakości 74% Accuracy w funkcji Batch Size i parametru K
+│   ├── local_sgd_convergence.png # Kontrola zmiany zbieżności (Loss, Test Acc) i liczby Allreduce dla K in {1, 4, 16, 64}
 │   ├── data_size_scaling.png     # Skalowanie względem rozmiaru danych (100k–5M próbek): Seq, Numba, MPI, CUDA
 │   └── cuda_comparison.png       # Porównanie czasów epok i zgodności Accuracy: CUDA vs Sequential (Colab T4)
-├── tests/                        # Zestaw 39 testów jednostkowych i integracyjnych
+├── tests/                        # Zestaw 41 testów jednostkowych i integracyjnych
 │   ├── conftest.py               # Automatyczna izolacja symulatora CUDASIM na macOS/laptopach bez NVIDIA
 │   ├── test_cli.py               # Testy argumentów CLI, serializacji modeli .npy/.npz i historii JSON
 │   ├── test_cuda.py              # Testy poprawności kerneli CUDA i zbieżności SGD na GPU
@@ -132,13 +133,13 @@ W projekcie zaimplementowano 5 wariantów optymalizacji, gwarantujących identyc
 * **Plik:** [`src/numba_sgd.py`](file:///Users/rafalwodzinski/Studia/PRiR/Projekt/prir-project/src/numba_sgd.py)
 * **Uzasadnienie formalne OpenMP w Pythonie:** W środowisku Python standardowym odpowiednikiem dyrektyw `#pragma omp parallel for` z biblioteki OpenMP jest kompilator JIT biblioteki **Numba** z dekoratorem `@njit(parallel=True)` i pętlą `prange()`, oparty pod spodem o backend wielowątkowości OpenMP/TBB.
 * **Ochrona przed wyścigami (Race Conditions):** Zastosowano wzorzec **Map-Reduce**:
-  * **Faza Map:** Każdy wątek sprzętowy pobiera swój identyfikator `tid = get_thread_id()` i akumuluje częściowy gradient próbek we własnym prywatnym buforze `local_grads[tid, j]`. Wyklucza to jednoczesny zapis do tej samej komórki pamięci w rejestrach CPU i eliminuje zjawisko *False Sharing*.
+  * **Faza Map:** Każdy wątek sprzętowy pobiera swój identyfikator `tid = get_thread_id()` i akumuluje częściowy gradient próbek w pre-alokowanym buforze `local_grads[tid, j]`, którego drugi wymiar jest wyrównany (*padded*) do wielokrotności linii cache **128 B (32 elementy `float32`)** (`allocate_padded_local_grads`). Eliminuje to zarówno wyścigi wątków, alokacje sterty wewnątrz pętli mini-batchy, jak i *False Sharing* na granicach wierszy sąsiednich wątków.
   * **Faza Reduce:** Po zakończeniu pętli równoległej następuje bezpieczna redukcja (zsumowanie wierszy tablicy wątków) i pojedyncza aktualizacja wag.
 
 ### 3. Klaster rozproszony MPI (mpi4py + Allreduce)
 * **Plik:** [`src/model_mpi.py`](file:///Users/rafalwodzinski/Studia/PRiR/Projekt/prir-project/src/model_mpi.py)
 * **Mechanika:** Synchroniczny *Data-Parallel Distributed SGD*. 
-  * Globalny mini-batch $B_{\text{global}}$ jest rozdzielany na $P$ rozłącznych podzbiorów lokalnych $B_{\text{local}} \approx B_{\text{global}} / P$ za pomocą funkcji `split_batch_for_rank`.
+  * Globalny mini-batch $B_{\text{global}}$ jest rozdzielany na $P$ rozłącznych przedziałów indeksów `slice_bounds_for_rank`, dzięki czemu każdy proces kopiuje z macierzy treningowej wyłącznie swoje lokalne $1/P$ wierszy (eliminacja szeregowej kopii całej macierzy `X_train` w każdym procesie).
   * Każdy węzeł/proces oblicza lokalną sumę błędów na swoim wycinku danych: $g_{\text{local}} = X_{\text{local}}^T (\hat{y}_{\text{local}} - y_{\text{local}})$.
   * Wywołanie kolektywne `comm.Allreduce(local_grad, global_grad, op=MPI.SUM)` synchronizuje wektor gradientu przez sieć, po czym każdy proces wykonuje identyczny krok aktualizacji wag. Wyniki są matematycznie w 100% tożsame z wariantem sekwencyjnym.
 
@@ -277,6 +278,7 @@ Następnie pobierz z Colaba pliki `reports/colab_seq_history.json`, `reports/col
 * `figures/speedup_efficiency.png` – krzywe przyspieszenia $S(p)$ i efektywności $E(p)$ (względem `T_seq` oraz $T_1$) wraz z dopasowaniem Prawa Amdahla w zakresie $f \in [0\%, 99\%]$.
 * `figures/scaling_comparison.png` – bezwzględne czasy wykonania treningu $T(p)$ (jednolity zakres: suma `epoch_times` po rozgrzewce JIT) vs linia odniesienia `T_seq`.
 * `figures/batch_k_analysis.png` – analiza wrażliwości metryki *Time-to-Quality* (**próg 74% Accuracy**, wynikający z sufitu regresji logistycznej ~75% na CS:GO) w funkcji wielkości partii i parametru $K$ (z raportowaniem `Train Acc` i `Test Acc`).
+* `figures/local_sgd_convergence.png` – kontrola zmiany zbieżności (`Train Loss`, `Test Accuracy`) oraz liczby wywołań `Allreduce` dla $K \in \{1\text{ (Sync)}, 4, 16, 64\}$ na 4 procesach `mpiexec`.
 * `figures/data_size_scaling.png` – czas epoki (skala log-log) i przyspieszenie względem `Sequential` dla rozmiarów 100k, 500k, 1M i 5M próbek (`Sequential`, `Numba`, `MPI`, `CUDA`).
 * `figures/cuda_comparison.png` – porównanie czasów pojedynczej epoki i zgodności krzywych Accuracy dla wariantu `CUDA` vs `Sequential` na CS:GO (Google Colab T4).
 
@@ -284,7 +286,7 @@ Następnie pobierz z Colaba pliki `reports/colab_seq_history.json`, `reports/col
 
 ### Uruchamianie testów jednostkowych (pytest)
 
-Zestaw 39 testów jednostkowych i integracyjnych weryfikuje wszystkie aspekty projektu:
+Zestaw 41 testów jednostkowych i integracyjnych weryfikuje wszystkie aspekty projektu:
 
 ```bash
 # Uruchomienie wszystkich testow
@@ -333,7 +335,7 @@ $$\text{np.allclose}(grad\_analityczny, grad\_numeryczny, atol=1e-5) \implies \m
 
 | Plik wyników / wykres | Zakres eksperymentu | Środowisko sprzętowe i programowe | Data pomiaru |
 |---|---|---|---|
-| `reports/benchmark_results.json` (`sequential_baseline`, `openmp_benchmark`, `mpi_benchmark`, `batch_k_sensitivity`)<br>`figures/speedup_efficiency.png`<br>`figures/scaling_comparison.png`<br>`figures/batch_k_analysis.png` | CS:GO (97 928 próbek × 104 cechy): baseline `T_seq`, skalowanie OpenMP/Numba (1–8T), MPI (`mpiexec`, 1–8P, $K=4$), analiza Batch–K do 74% Accuracy | **Apple M5 Pro** (`arm`, 15 rdzeni logicznych), macOS (Darwin 27.0.0), Python 3.13.13, NumPy 2.5.4, Numba 0.68.0, OpenMPI | 2026-11-25 |
+| `reports/benchmark_results.json` (`sequential_baseline`, `openmp_benchmark`, `mpi_sync_benchmark`, `mpi_benchmark`, `batch_k_sensitivity`, `local_sgd_convergence`)<br>`figures/speedup_efficiency.png`<br>`figures/scaling_comparison.png`<br>`figures/batch_k_analysis.png`<br>`figures/local_sgd_convergence.png` | CS:GO (97 928 próbek × 104 cechy): baseline `T_seq`, OpenMP/Numba (1–8T), MPI Sync (`K=1`) vs MPI Local-SGD (`K=4`, `mpiexec`, 1–8P), Batch–K do 74% Acc, kontrola zbieżności $K \in \{1, 4, 16, 64\}$ | **Apple M5 Pro** (`arm`, 15 rdzeni logicznych), macOS (Darwin 27.0.0), Python 3.13.13, NumPy 2.5.4, Numba 0.68.0, OpenMPI | 2026-11-25 |
 | `reports/benchmark_results.json` (`data_size_scaling`)<br>`figures/data_size_scaling.png` | Skalowanie rozmiaru danych syntetycznych (100k, 500k, 1M, 5M próbek × 101 cech, `batch=4096`): Sequential, Numba (8T), MPI (4P `mpiexec`), **CUDA** | **Google Colab** (Linux x86_64, Intel Xeon vCPU + **NVIDIA Tesla T4** 16 GB VRAM), Python 3.13, Numba CUDA, OpenMPI | 2026-11-12 |
 | `reports/cuda_results.json`<br>`reports/colab_cuda_history.json`<br>`reports/colab_seq_history.json`<br>`figures/cuda_comparison.png` | Porównanie 20 epok CUDA vs Sequential na zbiorze CS:GO (`batch=512`, `lr=0.003`): czas epoki oraz zgodność krzywych Accuracy i Loss | **Google Colab** (Linux x86_64, Intel Xeon vCPU + **NVIDIA Tesla T4** 16 GB VRAM), Python 3.13, Numba CUDA | 2026-11-04 |
 
@@ -350,17 +352,18 @@ Wszystkie warianty CPU (`Sequential`, `OpenMP / Numba`, `MPI`) w `scripts/run_be
 | **MPI (`mpiexec`)** | Tasowanie indeksów + podział batcha + lokalne SGD (NumPy) + `comm.Allreduce` co $K$ kroków (mierzone na `rank=0`) | Uruchomienie `mpiexec`, I/O danych, ewaluacja |
 | **CUDA (GPU)** | Przesłanie lekkiej tablicy indeksów `int32` + 3 kernele GPU, otoczone `cuda.synchronize()` | Jednorazowy transfer `X, y` do VRAM, 1. epoka (JIT), `copy_to_host` wag i ewaluacja |
 
-> **Dlaczego $T_1$ Numby (`0.150 s`) jest wyższe od $T_1$ MPI (`0.0385 s`) mimo identycznego zakresu pomiaru?**  
-> Na 1 wątku kernel Numby wykonuje jawne zagnieżdżone pętle skalarne po wierszach i cechach, natomiast `Sequential` i `MPI` (dla $p=1$) korzystają ze zwektoryzowanych operacji macierzowych BLAS/Accelerate w NumPy (`X @ weights`, `X.T @ error`). Dzięki ujednoliceniu zakresu oba czasy są w pełni porównywalne na jednym wykresie (`figures/scaling_comparison.png`).
+> **Dlaczego $T_1$ Numby (`0.082 s`) jest wyższe od $T_1$ MPI (`0.031 s`) mimo identycznego zakresu pomiaru?**  
+> Pre-alokacja i wyrównanie bufora do linii cache 128 B skróciły czas Numby niemal dwukrotnie (z `0.153 s` do `0.071–0.082 s`, dając przyspieszenie względne `1.15x` dla 4T), jednak na 1 wątku kernel Numby nadal wykonuje jawne pętle skalarne, podczas gdy `Sequential` i `MPI` korzystają z natywnego mnożenia macierzowego BLAS/Accelerate w NumPy.
 
-### 1. Przyspieszenie i efektywność (CS:GO vs `T_seq` i Prawo Amdahla)
-* Na zbiorze CS:GO (~98 tys. próbek × 104 cechy, `batch=512`) bazowa wersja sekwencyjna NumPy wykonuje 3 epoki w **`T_seq = 0.0346–0.0456 s`**.
-* Dla tak niewielkiego kosztu obliczeniowego na krok narzut uruchamiania wątków (`prange`) i komunikacji międzyprocesowej (`mpiexec`) przewyższa zysk ze zrównoleglenia: względem `T_seq` OpenMP/Numba osiąga `0.20x–0.31x`, a MPI `0.52x–0.90x`.
-* **Ograniczenie Prawa Amdahla:** dopasowanie krzywej $S(p) = \frac{1}{(1 - f) + f/p}$ w pełnym zakresie $f \in [0\%, 99\%]$ daje bardzo niski efektywny ułamek równoległy (rzędu kilku–kilkunastu procent dla Numby względem $T_1$, lub dolną granicę `0%` przy ujemnym skalowaniu). Klasyczny model Amdahla zakłada zerowy koszt synchronizacji ($S(p) \ge 1$), więc nie modeluje spadku wydajności poniżej `1.0x` wynikającego z narzutu barier wątkowych i komunikacji dla małych partii.
+### 1. Przyspieszenie i efektywność: MPI Sync (`K=1`) vs Local-SGD (`K=4`) vs OpenMP (`T_seq = 0.0344 s`)
+* Dzięki wyeliminowaniu szeregowego kopiowania całej macierzy w procesach MPI oba warianty wieloprocesowe (`mpiexec`) **wyraźnie wygrywają z wersją sekwencyjną** na zbiorze CS:GO (`batch=512`, Apple M5 Pro):
+  * **MPI Sync (`K=1`, redukcja gradientów po każdym batchu):** osiąga **`1.81x` przyspieszenia** względem `T_seq` dla $p=4$ (`0.0190 s`), ale dla $p=8$ zwalnia do `1.45x` (`0.0238 s`) wskutek narzutu komunikacji `Allreduce` na każdym kroku.
+  * **MPI Local-SGD (`K=4`, rzadka redukcja wag):** osiąga **`2.02x` przyspieszenia** względem `T_seq` dla $p=4$ (`0.0171 s`, efektywność **50.4%**) i utrzymuje **`1.99x` dla $p=8$ (`0.0173 s`)**, eliminując degradację komunikacyjną obserwowaną w wariancie synchronicznym.
+* **OpenMP / Numba:** skaluje się względnie do `1.15x` na 4 wątkach (`f = 11.9%` wg Prawa Amdahla), ale przez brak natywnych instrukcji BLAS pozostaje wolniejsza od `T_seq` (`0.48x`).
 
-### 2. Kompromis w Local SGD (Parametr K i rozmiar partii)
-* Na CS:GO regresja logistyczna osiąga liniowy sufit ~75% Accuracy, dlatego w eksperymencie czułości zbadano czas do osiągnięcia **74% Accuracy** (`lr=0.003`, ewaluacja na train `97 928` oraz test `24 482` próbek).
-* Najkrótszy czas daje `batch=128, K=16` (~28.4 ms, 1 epoka); we wszystkich 20 konfiguracjach dokładność na zbiorze testowym pokrywa się z treningową (**Train Acc: 74.09–74.56%**, **Test Acc: 74.22–74.64%**), co potwierdza brak przeuczenia. Większe wartości $K$ redukują koszt uśredniania wag o kilka–kilkanaście procent przy zachowaniu identycznej jakości generalizacji.
+### 2. Kontrola zmiany zbieżności w Local SGD i czułość Batch × K
+* **Kontrola zbieżności (`local_sgd_convergence.png`, `mpiexec -n 4`, 15 epok, `batch=256`, `lr=0.05`):** zwiększenie okresu synchronizacji z $K=1$ (Sync) do $K=64$ redukuje liczbę wywołań `Allreduce` **55-krotnie** (`5745 → 104`) i skraca łączny czas epok o **25.6%** (`126 ms → 94 ms`), zachowując niemal identyczną stratę końcową (`0.4719` vs `0.4720`) i dokładność testową (`74.85%` vs `74.88%`).
+* **Analiza Batch × K (`batch_k_analysis.png`, próg 74% Accuracy przy suficie ~75% na CS:GO):** najkrótszy czas daje `batch=128, K=16` (~26.9 ms, 1 epoka); we wszystkich 20 konfiguracjach dokładność testowa pokrywa się z treningową (**Train Acc: 74.09–74.56%**, **Test Acc: 74.22–74.64%**).
 
 ### 3. Akceleracja GPU CUDA i skalowanie rozmiaru danych
 * Na małym zbiorze CS:GO (`batch=512`, `cuda_comparison.png`) GPU osiąga identyczną dokładność i stratę co CPU (`75.13%`, Loss `0.4839`), ale jest wolniejsze (`0.40x`) przez narzut uruchamiania małych kerneli.
