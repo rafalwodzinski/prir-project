@@ -250,7 +250,7 @@ def plot_batch_and_k_analysis(
     ax.set_ylabel(f"Czas osiągnięcia {target_acc * 100:.0f}% Accuracy [s]", fontsize=11)
     ax.set_xticks(x_indices)
     ax.set_xticklabels([f"Batch = {b}" for b in batch_sizes], fontsize=10)
-    ax.legend(title="Częstość synchronizacji (K)", fontsize=9, loc="upper right")
+    ax.legend(title="Częstość synchronizacji (K)", fontsize=9, loc="upper left")
     ax.grid(True, linestyle="--", alpha=0.4, axis="y")
 
     # Dodanie marginesu u gory na adnotacje
@@ -263,10 +263,19 @@ def plot_batch_and_k_analysis(
         if sens.get("execution_mode", "simulated_workers") == "simulated_workers"
         else f"MPI Local SGD ({n_workers} procesów)"
     )
+    train_accs = [r["accuracy"] * 100 for r in grid_results if "accuracy" in r]
+    test_accs = [r["test_accuracy"] * 100 for r in grid_results if "test_accuracy" in r]
+    acc_summary = ""
+    if train_accs and test_accs:
+        acc_summary = (
+            f"\nTrain Acc: {min(train_accs):.2f}–{max(train_accs):.2f}% | "
+            f"Test Acc: {min(test_accs):.2f}–{max(test_accs):.2f}% "
+            f"(próg {target_acc * 100:.0f}% wynika z sufitu regresji logistycznej na CS:GO ~75%)"
+        )
     fig.suptitle(
-        f"Eksperyment wrażliwości — {mode_label} | Sprzęt: {cpu_name} | Ziarno: seed={seed} (mediana z 5 prób)",
-        fontsize=10,
-        y=0.98,
+        f"Eksperyment wrażliwości — {mode_label} | Sprzęt: {cpu_name} | seed={seed} (mediana z 5 prób){acc_summary}",
+        fontsize=9.5,
+        y=1.01,
     )
 
     plt.tight_layout()
