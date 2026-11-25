@@ -9,6 +9,7 @@ import numpy as np
 # Zabezpieczenie katalogu konfiguracyjnego matplotliba
 os.environ.setdefault("MPLCONFIGDIR", tempfile.gettempdir())
 import matplotlib.pyplot as plt
+from matplotlib.ticker import MaxNLocator
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FIGURES_DIR = REPO_ROOT / "figures"
@@ -415,6 +416,7 @@ def plot_cuda_comparison(
     ax1.set_title("Czas pojedynczej epoki", fontsize=11, fontweight="bold")
     ax1.set_xlabel("Epoka [-] (epoka 1 pominięta: kompilacja JIT / transfer)", fontsize=10)
     ax1.set_ylabel("Czas epoki [s]", fontsize=10)
+    ax1.xaxis.set_major_locator(MaxNLocator(integer=True))
     ax1.set_ylim(bottom=0)
     ax1.grid(True, linestyle="--", alpha=0.5)
     ax1.legend(fontsize=10)
@@ -434,6 +436,7 @@ def plot_cuda_comparison(
     ax2.set_title("Accuracy na zbiorze treningowym (zgodność wyników)", fontsize=11, fontweight="bold")
     ax2.set_xlabel("Epoka [-]", fontsize=10)
     ax2.set_ylabel("Accuracy [%]", fontsize=10)
+    ax2.xaxis.set_major_locator(MaxNLocator(integer=True))
     ax2.grid(True, linestyle="--", alpha=0.5)
     ax2.legend(fontsize=10)
 

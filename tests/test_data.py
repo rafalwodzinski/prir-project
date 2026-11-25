@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 from sklearn.preprocessing import StandardScaler
 
-from data_loader import load_and_preprocess_data, split_dataset, scale_features
+from src.data_loader import load_and_preprocess_data, split_dataset, scale_features
 
 
 @pytest.fixture

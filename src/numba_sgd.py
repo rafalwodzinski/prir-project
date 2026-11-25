@@ -5,9 +5,9 @@ import numpy as np
 from numpy.typing import NDArray
 from numba import njit, prange, get_thread_id, get_num_threads
 
-from data_loader import prepare_dataset
-from math_utils import SIGMOID_CLIP, compute_bce_loss
-from sequential_sgd import compute_accuracy, predict_proba, generate_synthetic_dataset
+from src.data_loader import prepare_dataset
+from src.math_utils import SIGMOID_CLIP, compute_bce_loss
+from src.sequential_sgd import compute_accuracy, predict_proba, generate_synthetic_dataset
 
 
 @njit(parallel=True)
@@ -100,8 +100,8 @@ def train_numba_sgd(
 
         # 1. Tasowanie zbioru (dokladnie ten sam generator rng co w Baseline)
         indices = rng.permutation(n_samples)
-        X_shuffled = np.ascontiguousarray(X_train[indices])
-        y_shuffled = np.ascontiguousarray(y_train[indices])
+        X_shuffled = X_train[indices]
+        y_shuffled = y_train[indices]
 
         # 2. Dzielenie na Mini-Batche -> Rownolegly Gradient (Numba) -> Aktualizacja Wag
         for start_idx in range(0, n_samples, batch_size):

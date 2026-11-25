@@ -13,18 +13,14 @@ import time
 from typing import Any
 import numpy as np
 
-# Dodajemy katalog src do sys.path, zeby moc importowac moduly projektu
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SRC_DIR = REPO_ROOT / "src"
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
 
 from numba import get_num_threads, set_num_threads
-from data_loader import add_intercept, prepare_dataset
-from main import collect_environment_metadata
-from sequential_sgd import compute_accuracy, generate_synthetic_dataset, predict_proba, train_sequential_sgd
-from numba_sgd import compute_gradient_numba, train_numba_sgd
-from model_mpi import (
+from src.data_loader import add_intercept, prepare_dataset
+from src.main import collect_environment_metadata
+from src.sequential_sgd import compute_accuracy, generate_synthetic_dataset, predict_proba, train_sequential_sgd
+from src.numba_sgd import compute_gradient_numba, train_numba_sgd
+from src.model_mpi import (
     MPI,
     run_local_sgd_epoch_simulated,
     split_batch_for_rank,
@@ -262,8 +258,8 @@ def simulate_local_sgd_multiprocess(
     for epoch in range(1, epochs + 1):
         t0 = time.perf_counter()
         indices = rng.permutation(n_samples)
-        X_shuffled = np.ascontiguousarray(X_train[indices])
-        y_shuffled = np.ascontiguousarray(y_train[indices])
+        X_shuffled = X_train[indices]
+        y_shuffled = y_train[indices]
 
         step_counter, epoch_syncs = run_local_sgd_epoch_simulated(
             X_shuffled,
@@ -321,7 +317,7 @@ def benchmark_mpi_scaling(
                         "--oversubscribe",
                         "-n", str(p),
                         sys.executable,
-                        str(SRC_DIR / "main.py"),
+                        "-m", "src.main",
                         "--mode", "mpi",
                         "--epochs", str(epochs),
                         "--batch-size", str(batch_size),
@@ -455,8 +451,8 @@ def benchmark_batch_and_k_sensitivity(
 
                 for epoch in range(1, max_epochs + 1):
                     indices = rng.permutation(n_samples)
-                    X_shuffled = np.ascontiguousarray(X_train[indices])
-                    y_shuffled = np.ascontiguousarray(y_train[indices])
+                    X_shuffled = X_train[indices]
+                    y_shuffled = y_train[indices]
 
                     step_counter, _ = run_local_sgd_epoch_simulated(
                         X_shuffled,
@@ -584,7 +580,7 @@ def benchmark_data_size_scaling(
     cuda_ok, cuda_device_name = has_physical_cuda_gpu()
     train_cuda_fn = None
     if cuda_ok:
-        from cuda_sgd import train_cuda_sgd
+        from src.cuda_sgd import train_cuda_sgd
         train_cuda_fn = train_cuda_sgd
 
     print(
@@ -648,7 +644,7 @@ def benchmark_data_size_scaling(
                     "--oversubscribe",
                     "-n", str(n_mpi_procs),
                     sys.executable,
-                    str(SRC_DIR / "main.py"),
+                    "-m", "src.main",
                     "--mode", "mpi",
                     "--synthetic-samples", str(n_samples),
                     "--synthetic-features", str(n_features),

@@ -1,8 +1,8 @@
 import numpy as np
 
-from math_utils import sigmoid, compute_gradient
-from sequential_sgd import add_intercept, generate_synthetic_dataset, train_sequential_sgd
-from numba_sgd import compute_gradient_numba, train_numba_sgd
+from src.math_utils import sigmoid, compute_gradient
+from src.sequential_sgd import add_intercept, generate_synthetic_dataset, train_sequential_sgd
+from src.numba_sgd import compute_gradient_numba, train_numba_sgd
 
 
 def test_numba_gradient_matches_vectorized_gradient():

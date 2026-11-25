@@ -16,9 +16,9 @@ except Exception:
     os.environ["NUMBA_ENABLE_CUDASIM"] = "1"
     from numba import cuda
 
-from data_loader import prepare_dataset
-from math_utils import SIGMOID_CLIP, compute_bce_loss
-from sequential_sgd import compute_accuracy, predict_proba, generate_synthetic_dataset
+from src.data_loader import prepare_dataset
+from src.math_utils import SIGMOID_CLIP, compute_bce_loss
+from src.sequential_sgd import compute_accuracy, predict_proba, generate_synthetic_dataset
 
 
 @cuda.jit
@@ -138,7 +138,6 @@ def train_cuda_sgd(
         "val_loss": [],
         "val_accuracy": [],
         "epoch_times": [],
-        "epoch_time": [],
     }
 
     for epoch in range(1, epochs + 1):
@@ -176,7 +175,6 @@ def train_cuda_sgd(
         cuda.synchronize()
         elapsed = time.perf_counter() - t0
         history["epoch_times"].append(elapsed)
-        history["epoch_time"].append(elapsed)
 
         # Pobieramy same wagi na koniec epoki zeby policzyc metryki
         current_weights = d_weights.copy_to_host()

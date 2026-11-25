@@ -13,8 +13,8 @@ pytestmark = pytest.mark.skipif(
     reason="Brak dostepu do urzadzenia CUDA lub symulatora CUDASIM",
 )
 
-from sequential_sgd import add_intercept, generate_synthetic_dataset
-from cuda_sgd import (
+from src.sequential_sgd import add_intercept, generate_synthetic_dataset
+from src.cuda_sgd import (
     compute_errors_cuda_kernel,
     compute_gradient_cuda_kernel,
     update_weights_cuda_kernel,
@@ -94,4 +94,5 @@ def test_cuda_sgd_convergence():
     assert history["loss"][-1] < history["loss"][0], "Loss w wersji CUDA powinien malec"
     assert history["accuracy"][-1] > 0.80, "Accuracy powinno przekroczyc 80%"
     assert not np.isnan(weights).any(), "Wagi nie moga zawierac wartosci NaN"
+    assert "epoch_times" in history and "epoch_time" not in history
 

@@ -2,8 +2,8 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-from math_utils import sigmoid, compute_bce_loss, compute_gradient
-from sequential_sgd import add_intercept, train_sequential_sgd, generate_synthetic_dataset
+from src.math_utils import sigmoid, compute_bce_loss, compute_gradient
+from src.sequential_sgd import add_intercept, train_sequential_sgd, generate_synthetic_dataset
 
 
 def compute_numerical_gradient(

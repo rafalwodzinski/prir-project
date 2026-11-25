@@ -3,8 +3,8 @@ import subprocess
 import sys
 import numpy as np
 
-from sequential_sgd import add_intercept, generate_synthetic_dataset, train_sequential_sgd
-from model_mpi import split_batch_for_rank, train_mpi_sgd
+from src.sequential_sgd import add_intercept, generate_synthetic_dataset, train_sequential_sgd
+from src.model_mpi import split_batch_for_rank, train_mpi_sgd
 
 
 def test_split_batch_for_rank_covers_entire_global_batch():
@@ -57,12 +57,10 @@ def test_mpi_4_processes_matches_baseline_loss_curve():
     """
     repo_root = Path(__file__).resolve().parent.parent
     code = "\n".join([
-        "import sys",
-        f"sys.path.insert(0, {str(repo_root / 'src')!r})",
         "import numpy as np",
         "from mpi4py import MPI",
-        "from sequential_sgd import add_intercept, generate_synthetic_dataset, train_sequential_sgd",
-        "from model_mpi import train_mpi_sgd",
+        "from src.sequential_sgd import add_intercept, generate_synthetic_dataset, train_sequential_sgd",
+        "from src.model_mpi import train_mpi_sgd",
         "comm = MPI.COMM_WORLD",
         "rank = comm.Get_rank()",
         "X, y = generate_synthetic_dataset(n_samples=600, n_features=10, seed=42, dtype=np.float32)",

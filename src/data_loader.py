@@ -83,19 +83,13 @@ def split_dataset(
     Podzial na train/test ze stratyfikacja klas i ustalonym seedem.
     Zwraca tablice z zachowana flaga C_CONTIGUOUS.
     """
-    X_train_raw, X_test_raw, y_train_raw, y_test_raw = train_test_split(
+    X_train, X_test, y_train, y_test = train_test_split(
         X,
         y,
         test_size=test_size,
         random_state=seed,
         stratify=y,
     )
-
-    # Upewniamy sie, ze po splicie tablice nadal sa ciagle w pamieci
-    X_train = np.ascontiguousarray(X_train_raw)
-    X_test = np.ascontiguousarray(X_test_raw)
-    y_train = np.ascontiguousarray(y_train_raw)
-    y_test = np.ascontiguousarray(y_test_raw)
 
     return X_train, X_test, y_train, y_test
 
