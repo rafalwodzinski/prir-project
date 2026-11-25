@@ -24,8 +24,12 @@ from data_loader import add_intercept, prepare_dataset
 from main import collect_environment_metadata
 from sequential_sgd import compute_accuracy, generate_synthetic_dataset, predict_proba, train_sequential_sgd
 from numba_sgd import compute_gradient_numba, train_numba_sgd
-from model_mpi import split_batch_for_rank, train_local_sgd_mpi, MPI
-from math_utils import sigmoid
+from model_mpi import (
+    MPI,
+    run_local_sgd_epoch_simulated,
+    split_batch_for_rank,
+    train_local_sgd_mpi,
+)
 
 
 def _mpi_subprocess_env() -> dict[str, str]:
@@ -261,35 +265,16 @@ def simulate_local_sgd_multiprocess(
         X_shuffled = np.ascontiguousarray(X_train[indices])
         y_shuffled = np.ascontiguousarray(y_train[indices])
 
-        for start_idx in range(0, n_samples, batch_size):
-            end_idx = start_idx + batch_size
-            X_global_batch = X_shuffled[start_idx:end_idx]
-            y_global_batch = y_shuffled[start_idx:end_idx]
-
-            # Faza lokalna na kazdym wezle (brak komunikacji sieciowej)
-            for rank in range(n_workers):
-                X_loc, y_loc = split_batch_for_rank(X_global_batch, y_global_batch, rank, n_workers)
-                if X_loc.shape[0] > 0:
-                    y_pred = sigmoid(X_loc @ worker_weights[rank])
-                    grad_loc = (X_loc.T @ (y_pred - y_loc)) / X_loc.shape[0]
-                    worker_weights[rank] -= learning_rate * grad_loc
-
-            step_counter += 1
-
-            # Faza redukcji (Allreduce wag) co K krokow
-            if sync_freq_k > 0 and step_counter % sync_freq_k == 0:
-                avg_weights = np.mean(worker_weights, axis=0)
-                for rank in range(n_workers):
-                    worker_weights[rank][:] = avg_weights
-                sync_count += 1
-
-        # Synchronizacja koncowa po epoce
-        if sync_freq_k > 0 and step_counter % sync_freq_k != 0:
-            avg_weights = np.mean(worker_weights, axis=0)
-            for rank in range(n_workers):
-                worker_weights[rank][:] = avg_weights
-            sync_count += 1
-
+        step_counter, epoch_syncs = run_local_sgd_epoch_simulated(
+            X_shuffled,
+            y_shuffled,
+            worker_weights,
+            batch_size=batch_size,
+            learning_rate=learning_rate,
+            sync_freq_k=sync_freq_k,
+            step_counter=step_counter,
+        )
+        sync_count += epoch_syncs
         epoch_times.append(time.perf_counter() - t0)
 
     return worker_weights[0], {"sync_count": sync_count, "epoch_times": epoch_times}
@@ -470,28 +455,18 @@ def benchmark_batch_and_k_sensitivity(
                     X_shuffled = np.ascontiguousarray(X_train[indices])
                     y_shuffled = np.ascontiguousarray(y_train[indices])
 
-                    for start_idx in range(0, n_samples, bs):
-                        end_idx = start_idx + bs
-                        X_batch = X_shuffled[start_idx:end_idx]
-                        y_batch = y_shuffled[start_idx:end_idx]
+                    step_counter, _ = run_local_sgd_epoch_simulated(
+                        X_shuffled,
+                        y_shuffled,
+                        worker_weights,
+                        batch_size=bs,
+                        learning_rate=learning_rate,
+                        sync_freq_k=k,
+                        step_counter=step_counter,
+                    )
 
-                        for rank in range(n_workers):
-                            X_loc, y_loc = split_batch_for_rank(X_batch, y_batch, rank, n_workers)
-                            if X_loc.shape[0] > 0:
-                                y_pred = sigmoid(X_loc @ worker_weights[rank])
-                                grad_loc = (X_loc.T @ (y_pred - y_loc)) / X_loc.shape[0]
-                                worker_weights[rank] -= learning_rate * grad_loc
-
-                        step_counter += 1
-
-                        if k > 0 and step_counter % k == 0:
-                            avg_w = np.mean(worker_weights, axis=0)
-                            for rank in range(n_workers):
-                                worker_weights[rank][:] = avg_w
-
-                    # Sprawdzenie dokladnosci po epoce na zsynchronizowanych wagach
-                    avg_w = np.mean(worker_weights, axis=0)
-                    probs = predict_proba(X_train, avg_w)
+                    # Sprawdzenie dokladnosci po epoce na zsynchronizowanych wagach (worker_weights sa juz usrednione)
+                    probs = predict_proba(X_train, worker_weights[0])
                     acc = compute_accuracy(y_train, probs)
                     final_acc = acc
 
@@ -535,6 +510,13 @@ def benchmark_batch_and_k_sensitivity(
             })
 
     return {
+        "execution_mode": "simulated_workers",
+        "n_workers": n_workers,
+        "note": (
+            "Symulacja wieloprocesowego Local SGD w jednym procesie "
+            "(wspolna logika run_local_sgd_epoch_simulated z src/model_mpi.py) – "
+            "mierzy matematyczny wplyw Batch Size i K bez narzutu startu mpiexec."
+        ),
         "target_accuracy": target_accuracy,
         "batch_sizes": batch_sizes,
         "k_values": k_values,

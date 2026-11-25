@@ -234,8 +234,14 @@ def plot_batch_and_k_analysis(
     y_max = np.max(times_matrix)
     ax.set_ylim(0, y_max * 1.15)
 
+    n_workers = sens.get("n_workers", 4)
+    mode_label = (
+        f"Symulacja Local SGD ({n_workers} workerów)"
+        if sens.get("execution_mode", "simulated_workers") == "simulated_workers"
+        else f"MPI Local SGD ({n_workers} procesów)"
+    )
     fig.suptitle(
-        f"Eksperyment wrażliwości Local SGD | Sprzęt: {cpu_name} | Ziarno: seed={seed} (mediana z 5 prób)",
+        f"Eksperyment wrażliwości — {mode_label} | Sprzęt: {cpu_name} | Ziarno: seed={seed} (mediana z 5 prób)",
         fontsize=10,
         y=0.98,
     )

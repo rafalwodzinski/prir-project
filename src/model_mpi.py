@@ -155,6 +155,87 @@ def train_mpi_sgd(
     return weights, history
 
 
+def local_sgd_step(
+    X_local: NDArray[Any],
+    y_local: NDArray[Any],
+    weights: NDArray[Any],
+    learning_rate: float,
+) -> NDArray[Any]:
+    """
+    Pojedynczy lokalny krok gradientowy SGD na wycinku danych wezla (brak komunikacji).
+    Jedyne zrodlo prawdy dla kroku Local SGD (uzywane w MPI oraz w symulacji benchmarkow).
+    """
+    if X_local.shape[0] == 0:
+        return weights
+    y_pred_local = sigmoid(X_local @ weights)
+    error_local = y_pred_local - y_local
+    grad_local = (X_local.T @ error_local) / X_local.shape[0]
+    return weights - learning_rate * grad_local
+
+
+def sync_weights_mpi(
+    weights: NDArray[Any],
+    global_weights_sum: NDArray[Any],
+    comm: Any,
+    size: int,
+) -> None:
+    """Synchronizuje wagi modeli miedzy procesami MPI przez Allreduce (srednia wag)."""
+    comm.Allreduce(weights, global_weights_sum, op=MPI.SUM)
+    weights[:] = global_weights_sum / size
+
+
+def sync_weights_local(worker_weights: list[NDArray[Any]]) -> NDArray[Any]:
+    """
+    Symulowany odpowiednik Allreduce na liscie lokalnych wektorow wag:
+    oblicza srednia wag i przypisuje ja wszystkim workerom.
+    """
+    avg_weights = np.mean(worker_weights, axis=0)
+    for w in worker_weights:
+        w[:] = avg_weights
+    return avg_weights
+
+
+def run_local_sgd_epoch_simulated(
+    X_shuffled: NDArray[Any],
+    y_shuffled: NDArray[Any],
+    worker_weights: list[NDArray[Any]],
+    batch_size: int,
+    learning_rate: float,
+    sync_freq_k: int,
+    step_counter: int = 0,
+) -> tuple[int, int]:
+    """
+    Wspolna petla jednej epoki Local SGD w trybie symulacji wieloprocesowej.
+    Korzysta z tej samej funkcji kroku `local_sgd_step` i podzialu `split_batch_for_rank`
+    co rzeczywista implementacja MPI (`train_local_sgd_mpi`).
+    Zwraca (zaktualizowany step_counter, liczba synchronizacji w tej epoce).
+    """
+    n_samples = X_shuffled.shape[0]
+    n_workers = len(worker_weights)
+    syncs = 0
+
+    for start_idx in range(0, n_samples, batch_size):
+        end_idx = start_idx + batch_size
+        X_global_batch = X_shuffled[start_idx:end_idx]
+        y_global_batch = y_shuffled[start_idx:end_idx]
+
+        for rank in range(n_workers):
+            X_loc, y_loc = split_batch_for_rank(X_global_batch, y_global_batch, rank, n_workers)
+            worker_weights[rank] = local_sgd_step(X_loc, y_loc, worker_weights[rank], learning_rate)
+
+        step_counter += 1
+
+        if sync_freq_k > 0 and step_counter % sync_freq_k == 0:
+            sync_weights_local(worker_weights)
+            syncs += 1
+
+    if sync_freq_k > 0 and step_counter % sync_freq_k != 0:
+        sync_weights_local(worker_weights)
+        syncs += 1
+
+    return step_counter, syncs
+
+
 def train_local_sgd_mpi(
     X_train: NDArray[Any],
     y_train: NDArray[Any],
@@ -212,27 +293,19 @@ def train_local_sgd_mpi(
 
             X_local, y_local = split_batch_for_rank(X_global_batch, y_global_batch, rank, size)
 
-            if X_local.shape[0] > 0:
-                # 1. Lokalna predykcja i lokalny gradient (brak komunikacji sieciowej)
-                y_pred_local = sigmoid(X_local @ weights)
-                error_local = y_pred_local - y_local
-                grad_local = (X_local.T @ error_local) / X_local.shape[0]
-
-                # 2. Lokalna aktualizacja wag na wezle
-                weights = weights - learning_rate * grad_local
+            # 1-2. Lokalny krok gradientowy i aktualizacja wag (brak komunikacji sieciowej)
+            weights = local_sgd_step(X_local, y_local, weights, learning_rate)
 
             step_counter += 1
 
             # 3. Synchronizacja modeli co K krokow przez Allreduce na wektorach wag
             if sync_freq_k > 0 and step_counter % sync_freq_k == 0:
-                comm.Allreduce(weights, global_weights_sum, op=MPI.SUM)
-                weights[:] = global_weights_sum / size
+                sync_weights_mpi(weights, global_weights_sum, comm, size)
                 history["sync_count"] += 1
 
         # Upewniamy sie, ze na koniec epoki modele sa zsynchronizowane
         if sync_freq_k > 0 and step_counter % sync_freq_k != 0:
-            comm.Allreduce(weights, global_weights_sum, op=MPI.SUM)
-            weights[:] = global_weights_sum / size
+            sync_weights_mpi(weights, global_weights_sum, comm, size)
             history["sync_count"] += 1
 
         elapsed = time.perf_counter() - t0
