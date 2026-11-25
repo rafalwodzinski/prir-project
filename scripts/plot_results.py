@@ -24,16 +24,21 @@ def compute_amdahl_speedup(p_values: np.ndarray, parallel_fraction_f: float) -> 
     return 1.0 / ((1.0 - f) + (f / p_values))
 
 
+AMDAHL_F_MIN = 0.0
+AMDAHL_F_MAX = 0.99
+
+
 def fit_parallel_fraction(p_values: list[int], speedups: list[float]) -> float:
     """
-    Szacuje ulamek rownolegly 'f' z danych empirycznych (metoda najmniejszych kwadratow).
+    Szacuje ulamek rownolegly 'f' z danych empirycznych (metoda najmniejszych kwadratow)
+    w pelnym zakresie [0.0, 0.99], bez sztucznego ucinania na 0.50.
     """
     p_arr = np.array(p_values, dtype=float)
     s_arr = np.array(speedups, dtype=float)
 
-    # Szukamy f minimalizujacego blad kwadratowy pomiedzy S_empirical a S_Amdahl
-    f_candidates = np.linspace(0.50, 0.99, 500)
-    best_f = 0.85
+    # Pelna siatka [0.0, 0.99] pozwala uczciwie wykryc niski ulamek rownolegly lub dominacje narzutu
+    f_candidates = np.linspace(AMDAHL_F_MIN, AMDAHL_F_MAX, 1000)
+    best_f = 0.0
     min_sse = float("inf")
 
     for f in f_candidates:
@@ -84,6 +89,8 @@ def plot_speedup_and_efficiency(
 
     # Teoretyczne Prawo Amdahla dla Numba/OpenMP (skalowanie wzgledem T_1)
     f_fit = fit_parallel_fraction(omp_threads, omp_speedup)
+    at_boundary = (f_fit <= AMDAHL_F_MIN + 1e-3) or (f_fit >= AMDAHL_F_MAX - 1e-3)
+    has_sub_unity = any(s < 1.0 for s in omp_speedup[1:])
     p_dense = np.linspace(1, max(max(omp_threads), max(mpi_procs)), 100)
     amdahl_dense = compute_amdahl_speedup(p_dense, f_fit)
 
@@ -93,7 +100,23 @@ def plot_speedup_and_efficiency(
     # --- Panel 1: Przyspieszenie S(p) ---
     max_p = max(max(omp_threads), max(mpi_procs))
     ax_s.plot([1, max_p], [1, max_p], "k--", alpha=0.5, label="Idealne skalowanie S(p) = p")
-    ax_s.plot(p_dense, amdahl_dense, "r:", linewidth=1.8, label=f"Prawo Amdahla (f={f_fit*100:.1f}%)")
+    amdahl_label = (
+        f"Prawo Amdahla (f={f_fit*100:.1f}%, granica siatki)"
+        if at_boundary
+        else f"Prawo Amdahla (f={f_fit*100:.1f}%, S_max={1.0 / (1.0 - f_fit):.2f}x)"
+    )
+    ax_s.plot(p_dense, amdahl_dense, "r:", linewidth=2.0, label=amdahl_label)
+    if at_boundary or has_sub_unity:
+        note_text = (
+            f"Uwaga: dopasowane f={f_fit*100:.1f}% "
+            f"({'granica siatki [0%, 99%]' if at_boundary else 'niski udział równoległy'}).\n"
+            "Klasyczny model Amdahla nie modeluje narzutu synchronizacji (S(p) < 1)."
+        )
+        ax_s.text(
+            0.02, 0.52, note_text,
+            transform=ax_s.transAxes, fontsize=8, va="top",
+            bbox={"boxstyle": "round", "facecolor": "#fff8e7", "edgecolor": "#d9a036", "alpha": 0.9},
+        )
     if has_omp_seq or has_mpi_seq:
         ax_s.axhline(1.0, color="#444444", linestyle="-.", alpha=0.7, linewidth=1.2, label="Baseline Sequential (S = 1.0)")
     if has_omp_seq:

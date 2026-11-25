@@ -86,6 +86,28 @@ def test_amdahl_law_curve_properties():
     assert np.isclose(s_large[0], 10.0, atol=0.001)
 
 
+def test_fit_parallel_fraction_full_range_and_boundaries():
+    """
+    Sprawdza, ze fit_parallel_fraction przeszukuje pelny zakres [0.0, 0.99]
+    (nie obcina sztucznie na 0.50) i poprawnie rozpoznaje niski ulamek f oraz granice 0.0.
+    """
+    p_vals = [1, 2, 4, 8]
+
+    # Niski ulamek rownolegly f=0.20 (wczesniej blednie obcinany do 0.50)
+    s_low = compute_amdahl_speedup(np.array(p_vals, dtype=float), 0.20).tolist()
+    f_low = fit_parallel_fraction(p_vals, s_low)
+    assert np.isclose(f_low, 0.20, atol=0.01)
+
+    # Wysoki ulamek rownolegly f=0.90
+    s_high = compute_amdahl_speedup(np.array(p_vals, dtype=float), 0.90).tolist()
+    f_high = fit_parallel_fraction(p_vals, s_high)
+    assert np.isclose(f_high, 0.90, atol=0.01)
+
+    # Brak przyspieszenia / ujemne skalowanie -> dolna granica 0.0
+    f_zero = fit_parallel_fraction(p_vals, [1.0, 0.95, 0.85, 0.70])
+    assert np.isclose(f_zero, 0.0, atol=1e-3)
+
+
 def test_hardware_info_returns_required_fields():
     """
     Sprawdza czy pobieranie informacji sprzetowych zwraca wymagane pola do legendy.
