@@ -21,6 +21,7 @@ if str(SRC_DIR) not in sys.path:
 
 from numba import get_num_threads, set_num_threads
 from data_loader import add_intercept, prepare_dataset
+from main import collect_environment_metadata
 from sequential_sgd import compute_accuracy, generate_synthetic_dataset, predict_proba, train_sequential_sgd
 from numba_sgd import compute_gradient_numba, train_numba_sgd
 from model_mpi import split_batch_for_rank, train_local_sgd_mpi, MPI
@@ -59,12 +60,19 @@ def has_physical_cuda_gpu() -> tuple[bool, str | None]:
 
 def get_hardware_info() -> dict[str, Any]:
     """
-    Pobiera podstawowe informacje o srodowisku sprzetowym do legendy wykresow.
+    Pobiera pelne informacje o srodowisku sprzetowym (CPU, GPU z nvidia-smi,
+    wersje Python/NumPy/Numba/CUDA) do metadanych JSON i legendy wykresow.
     """
+    env = collect_environment_metadata()
     return {
         "processor": platform.processor() or "CPU x86_64",
-        "cpu_count_logical": os.cpu_count() or 1,
-        "python_version": platform.python_version(),
+        "cpu_count_logical": env["cpu_count_logical"],
+        "python_version": env["python_version"],
+        "numpy_version": env["numpy_version"],
+        "numba_version": env["numba_version"],
+        "gpu_model": env["gpu_model"],
+        "nvidia_driver": env["nvidia_driver"],
+        "cuda_version": env["cuda_version"],
         "system": platform.system(),
         "release": platform.release(),
     }
@@ -703,6 +711,8 @@ def benchmark_data_size_scaling(
         gc.collect()
 
     return {
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "environment": get_hardware_info(),
         "sample_sizes": sample_sizes,
         "n_features": n_features + 1,
         "epochs": epochs,

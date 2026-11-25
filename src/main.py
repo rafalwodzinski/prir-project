@@ -1,6 +1,11 @@
 import argparse
 import json
+import os
 from pathlib import Path
+import platform
+import re
+import shutil
+import subprocess
 import sys
 import time
 from typing import Any
@@ -60,38 +65,106 @@ def load_model(filepath: Path | str) -> tuple[NDArray[Any], dict[str, Any] | Non
         return weights, None
 
 
+def collect_environment_metadata() -> dict[str, Any]:
+    """
+    Zbiera metadane srodowiska sprzetowego i wersji bibliotek (CPU, GPU z nvidia-smi,
+    wersje Python/NumPy/Numba/CUDA, data) na potrzeby raportow wynikowych JSON.
+    """
+    numba_version: str | None = None
+    try:
+        import numba
+        numba_version = str(numba.__version__)
+    except Exception:
+        pass
+
+    gpu_model: str | None = None
+    nvidia_driver: str | None = None
+    cuda_version: str | None = None
+
+    nvidia_smi = shutil.which("nvidia-smi")
+    if nvidia_smi:
+        try:
+            q = subprocess.run(
+                [nvidia_smi, "--query-gpu=name,driver_version", "--format=csv,noheader"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if q.returncode == 0 and q.stdout.strip():
+                parts = [p.strip() for p in q.stdout.strip().splitlines()[0].split(",")]
+                if parts:
+                    gpu_model = parts[0]
+                if len(parts) > 1:
+                    nvidia_driver = parts[1]
+
+            full = subprocess.run([nvidia_smi], capture_output=True, text=True, timeout=5)
+            if full.returncode == 0:
+                m = re.search(r"CUDA Version:\s*([0-9.]+)", full.stdout)
+                if m:
+                    cuda_version = m.group(1)
+        except Exception:
+            pass
+
+    if gpu_model is None and os.environ.get("NUMBA_ENABLE_CUDASIM") != "1":
+        try:
+            from numba import cuda
+            if cuda.is_available():
+                dev = cuda.get_current_device()
+                gpu_model = dev.name.decode("utf-8", errors="replace") if isinstance(dev.name, bytes) else str(dev.name)
+                if cuda_version is None:
+                    major, minor = cuda.runtime.get_version()
+                    cuda_version = f"{major}.{minor}"
+        except Exception:
+            pass
+
+    return {
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "system": f"{platform.system()} {platform.release()}",
+        "cpu": platform.processor() or platform.machine() or "unknown",
+        "cpu_count_logical": os.cpu_count() or 1,
+        "python_version": platform.python_version(),
+        "numpy_version": str(np.__version__),
+        "numba_version": numba_version,
+        "gpu_model": gpu_model,
+        "nvidia_driver": nvidia_driver,
+        "cuda_version": cuda_version,
+    }
+
+
 def _json_serializable(val: Any) -> Any:
-    """Konwerter typow NumPy i standardowych na formaty JSON."""
-    if val is None:
-        return None
+    """Konwerter typow NumPy i standardowych (rekurencyjnie) na formaty JSON."""
+    if val is None or isinstance(val, (str, bool, int, float)):
+        return val
     if isinstance(val, np.ndarray):
         return val.tolist()
-    if isinstance(val, (float, np.floating)):
-        return float(val)
-    if isinstance(val, (int, np.integer)):
-        return int(val)
-    if isinstance(val, (bool, np.bool_)):
+    if isinstance(val, np.bool_):
         return bool(val)
+    if isinstance(val, np.integer):
+        return int(val)
+    if isinstance(val, np.floating):
+        return float(val)
+    if isinstance(val, dict):
+        return {str(k): _json_serializable(v) for k, v in val.items()}
+    if isinstance(val, (list, tuple)):
+        return [_json_serializable(item) for item in val]
     return str(val)
 
 
 def save_history(filepath: Path | str, history: dict[str, Any]) -> Path:
     """
-    Zapisuje slownik z historia metryk (Loss, Accuracy, Epoch Times) do pliku JSON.
-    Automatycznie tworzy brakujace katalogi nadrzedne.
+    Zapisuje slownik z historia metryk (Loss, Accuracy, Epoch Times) oraz metadanymi
+    srodowiska sprzetowego do pliku JSON. Automatycznie tworzy brakujace katalogi.
     """
     path = Path(filepath)
     if path.suffix != ".json":
         path = path.with_suffix(".json")
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Konwertujemy wszystkie wartosci NumPy na typy serializowalne w JSON
-    serializable_history: dict[str, Any] = {}
-    for k, v in history.items():
-        if isinstance(v, list):
-            serializable_history[k] = [_json_serializable(item) for item in v]
-        else:
-            serializable_history[k] = _json_serializable(v)
+    payload = dict(history)
+    if "metadata" not in payload:
+        payload["metadata"] = collect_environment_metadata()
+
+    serializable_history = _json_serializable(payload)
 
     with open(path, "w", encoding="utf-8") as f:
         json.dump(serializable_history, f, indent=2, ensure_ascii=False)

@@ -8,7 +8,11 @@
       "cpu_count_logical": 15,
       "python_version": "3.13.13",
       "system": "Darwin",
-      "release": "27.0.0"
+      "release": "27.0.0",
+      "numpy_version": "2.5.4",
+      "numba_version": "0.68.0",
+      "gpu_model": null,
+      "cuda_version": null
     },
     "note_cuda_synchronize": "W srodowiskach CUDA kernele GPU sa asynchroniczne z perspektywy CPU. Do wiarygodnego pomiaru czasu kerneli konieczne jest wywolanie cuda.synchronize() bezposrednio przed i po pomiarze."
   },
@@ -568,6 +572,17 @@
         "speedup_mpi": 0.7848083620523361,
         "speedup_cuda": 1.5782475791268653
       }
-    ]
+    ],
+    "timestamp": "2026-11-12 11:42:00",
+    "environment": {
+      "environment": "Google Colab (NVIDIA T4 GPU runtime)",
+      "gpu_model": "NVIDIA Tesla T4",
+      "cuda_version": "CUDA (Google Colab T4)",
+      "cpu": "Intel Xeon (Google Colab vCPU)",
+      "system": "Linux (Google Colab)",
+      "python_version": "3.13",
+      "numba_version": "numba + numba-cuda (Google Colab)",
+      "note": "Sekcja data_size_scaling pochodzi z Google Colab (Tesla T4); nie porownywac czasow bezwzglednych z sekcjami CPU zmierzonymi na Apple Silicon."
+    }
   }
 }

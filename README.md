@@ -59,13 +59,18 @@ Głównym celem badawczym jest **ocena przyspieszenia $S(p)$ i efektywności $E(
 │   └── verify_real_data.py       # Szybka weryfikacja poprawności wczytywania zbioru CS:GO
 ├── notebooks/                    # Notatniki demonstracyjne dla chmury
 │   └── cuda_colab.ipynb          # Notatnik Google Colab z akceleratorem Nvidia Tesla T4
-├── reports/                      # Zapisane raporty z eksperymentów
-│   └── benchmark_results.json    # Surowe dane pomiarowe, czasy i przyspieszenia w formacie JSON
+├── reports/                      # Zapisane raporty z eksperymentów (każdy zawiera metadane sprzętu)
+│   ├── benchmark_results.json    # Wyniki skalowania CPU (Mac), Batch-K oraz skalowania rozmiaru danych (Colab T4)
+│   ├── cuda_results.json         # Podsumowanie porównania CUDA vs Sequential na CS:GO (Colab T4)
+│   ├── colab_cuda_history.json   # Surowa historia epok dla wariantu CUDA z sesji Google Colab
+│   └── colab_seq_history.json    # Surowa historia epok dla wariantu Sequential z tej samej sesji Google Colab
 ├── figures/                      # Wygenerowane wykresy naukowe
-│   ├── speedup_efficiency.png    # Przyspieszenie S(p) i efektywność E(p) vs Prawo Amdahla
-│   ├── scaling_comparison.png    # Porównanie czasów epok w funkcji liczby rdzeni/procesów
-│   └── batch_k_analysis.png      # Czas do jakości 74% Accuracy w funkcji Batch Size i parametru K
-├── tests/                        # Zestaw 33 testów jednostkowych i integracyjnych
+│   ├── speedup_efficiency.png    # Przyspieszenie S(p) i efektywność E(p) (vs T_seq i vs T₁) oraz Prawo Amdahla
+│   ├── scaling_comparison.png    # Porównanie czasów epok w funkcji liczby rdzeni/procesów vs baseline T_seq
+│   ├── batch_k_analysis.png      # Czas do jakości 74% Accuracy w funkcji Batch Size i parametru K
+│   ├── data_size_scaling.png     # Skalowanie względem rozmiaru danych (100k–5M próbek): Seq, Numba, MPI, CUDA
+│   └── cuda_comparison.png       # Porównanie czasów epok i zgodności Accuracy: CUDA vs Sequential (Colab T4)
+├── tests/                        # Zestaw 36 testów jednostkowych i integracyjnych
 │   ├── conftest.py               # Automatyczna izolacja symulatora CUDASIM na macOS/laptopach bez NVIDIA
 │   ├── test_cli.py               # Testy argumentów CLI, serializacji modeli .npy/.npz i historii JSON
 │   ├── test_cuda.py              # Testy poprawności kerneli CUDA i zbieżności SGD na GPU
@@ -275,18 +280,27 @@ $$\text{np.allclose}(grad\_analityczny, grad\_numeryczny, atol=1e-5) \implies \m
 
 ## Wyniki eksperymentów i wnioski
 
-Pomiary wykonano na wielordzeniowym procesorze Apple M5 Pro (15 rdzeni logicznych) oraz karcie Nvidia Tesla T4 (Google Colab).
+### Środowiska pomiarowe (tabela: wynik → środowisko)
 
-### 1. Przyspieszenie i efektywność (Prawo Amdahla)
-* Zgodnie z Prawem Amdahla:
-  $$S(p) = \frac{1}{(1 - f) + \frac{f}{p}}$$
-  estymowany ułamek równoległy kodu wynosi **$f \approx 87.5\%$**. 
-* Dla małych partii danych narzut synchronizacji wątków/procesów dominuje nad zyskiem z podziału obliczeń. Wzrost przyspieszenia jest najbardziej widoczny przy większych partiach ($B \ge 512$).
+> **Ważne zastrzeżenie metodologiczne:** Pomiary CPU (OpenMP/Numba, MPI, Batch–K) wykonano lokalnie na Apple Silicon, natomiast pomiary z akceleratorem GPU CUDA wykonano w Google Colab na karcie NVIDIA Tesla T4. **Bezwzględnych czasów wykonania z Apple M5 Pro i Google Colab nie należy bezpośrednio ze sobą porównywać** — w każdym środowisku warianty równoległe są odnoszone do baseline'u sekwencyjnego (`T_seq`) zmierzonego na **tej samej maszynie**.
 
-### 2. Kompromis w Local SGD (Parametr K)
-* Zwiększenie parametru rzadkiej synchronizacji $K$ ($K=4, 8, 16$) drastycznie redukuje liczbę wywołań operacji kolektywnych `Allreduce`, co w środowiskach rozproszonych o dużej latencji sieciowej przynosi znaczne oszczędności czasu.
-* Zbyt duża wartość $K$ prowadzi jednak do rozbiegania się lokalnych wag modeli (*client drift*), co wymaga większej liczby epok do osiągnięcia zadanego progu dokładności. Optymalną wartością kompromisową dla badanych danych okazało się **$K = 4$**.
+| Plik wyników / wykres | Zakres eksperymentu | Środowisko sprzętowe i programowe | Data pomiaru |
+|---|---|---|---|
+| `reports/benchmark_results.json` (`sequential_baseline`, `openmp_benchmark`, `mpi_benchmark`, `batch_k_sensitivity`)<br>`figures/speedup_efficiency.png`<br>`figures/scaling_comparison.png`<br>`figures/batch_k_analysis.png` | CS:GO (97 928 próbek × 104 cechy): baseline `T_seq`, skalowanie OpenMP/Numba (1–8T), MPI (`mpiexec`, 1–8P, $K=4$), analiza Batch–K do 74% Accuracy | **Apple M5 Pro** (`arm`, 15 rdzeni logicznych), macOS (Darwin 27.0.0), Python 3.13.13, NumPy 2.5.4, Numba 0.68.0, OpenMPI | 2026-11-25 |
+| `reports/benchmark_results.json` (`data_size_scaling`)<br>`figures/data_size_scaling.png` | Skalowanie rozmiaru danych syntetycznych (100k, 500k, 1M, 5M próbek × 101 cech, `batch=4096`): Sequential, Numba (8T), MPI (4P `mpiexec`), **CUDA** | **Google Colab** (Linux x86_64, Intel Xeon vCPU + **NVIDIA Tesla T4** 16 GB VRAM), Python 3.13, Numba CUDA, OpenMPI | 2026-11-12 |
+| `reports/cuda_results.json`<br>`reports/colab_cuda_history.json`<br>`reports/colab_seq_history.json`<br>`figures/cuda_comparison.png` | Porównanie 20 epok CUDA vs Sequential na zbiorze CS:GO (`batch=512`, `lr=0.003`): czas epoki oraz zgodność krzywych Accuracy i Loss | **Google Colab** (Linux x86_64, Intel Xeon vCPU + **NVIDIA Tesla T4** 16 GB VRAM), Python 3.13, Numba CUDA | 2026-11-04 |
 
-### 3. Akceleracja GPU CUDA
-* Przeniesienie obliczeń na GPU wykazuje swoją przewagę przy dużych partiach próbek ($B \ge 1024$). 
-* Utrzymanie danych rezydentnych w VRAM i przesyłanie jedynie tablicy indeksów pozwoliło ograniczyć czas transferów magistralą PCIe do ułamka milisekundy na epokę.
+Szczegółowe metadane sprzętowe (CPU, model GPU, wersje bibliotek oraz data) zapisywane są automatycznie w sekcji `"metadata"` / `"environment"` każdego pliku wynikowego JSON w `reports/`.
+
+### 1. Przyspieszenie i efektywność (CS:GO vs `T_seq` i Prawo Amdahla)
+* Na zbiorze CS:GO (~98 tys. próbek × 104 cechy, `batch=512`) bazowa wersja sekwencyjna NumPy wykonuje 3 epoki w **`T_seq = 0.0346 s`**.
+* Dla tak niewielkiego kosztu obliczeniowego na krok narzut uruchamiania wątków (`prange`) i komunikacji międzyprocesowej (`mpiexec`) przewyższa zysk ze zrównoleglenia: względem `T_seq` OpenMP/Numba osiąga `0.20x–0.24x`, a MPI `0.52x–0.90x`. Pokazuje to wprost ograniczenia Prawa Amdahla dla problemów o niskiej intensywności obliczeniowej.
+
+### 2. Kompromis w Local SGD (Parametr K i rozmiar partii)
+* Na CS:GO regresja logistyczna osiąga sufit ~75% Accuracy, dlatego w eksperymencie czułości zbadano czas do osiągnięcia **74% Accuracy** (`lr=0.003`).
+* Najkrótszy czas daje `batch=128, K=16` (~26.3 ms, 1 epoka); większe wartości $K$ redukują koszt uśredniania wag o kilka–kilkanaście procent przy zachowaniu praktycznie identycznej dokładności.
+
+### 3. Akceleracja GPU CUDA i skalowanie rozmiaru danych
+* Na małym zbiorze CS:GO (`batch=512`, `cuda_comparison.png`) GPU osiąga identyczną dokładność i stratę co CPU (`75.13%`, Loss `0.4839`), ale jest wolniejsze (`0.40x`) przez narzut uruchamiania małych kerneli.
+* W eksperymencie skalowania rozmiaru danych (`data_size_scaling.png`, `batch=4096`, Tesla T4) **próg opłacalności GPU wypada między 100k a 500k próbek**: przy 100k CUDA ma `0.96x`, natomiast od **500k do 5M próbek wyraźnie wygrywa z wersją sekwencyjną, osiągając `1.58x–1.69x` przyspieszenia**.
+* Utrzymanie danych rezydentnych w VRAM i przesyłanie jedynie tablicy indeksów `int32` eliminuje wąskie gardło magistrali PCIe w pętli epok.

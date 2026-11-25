@@ -98,6 +98,9 @@ def test_save_and_load_history_json(tmp_path: Path):
     assert loaded_h["accuracy"] == history["accuracy"]
     assert loaded_h["epoch_to_target_accuracy"] == 2
     assert np.isclose(loaded_h["time_to_target_accuracy"], 0.023)
+    assert isinstance(loaded_h["metadata"], dict)
+    for key in ("timestamp", "cpu", "python_version", "numba_version", "gpu_model", "cuda_version"):
+        assert key in loaded_h["metadata"]
 
 
 def test_calculate_time_to_quality():
