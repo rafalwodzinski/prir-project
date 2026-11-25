@@ -1,8 +1,8 @@
 import numpy as np
 import pytest
 
-from sequential_sgd import add_intercept, generate_synthetic_dataset
-from model_mpi import (
+from src.sequential_sgd import add_intercept, generate_synthetic_dataset
+from src.model_mpi import (
     MPI,
     local_sgd_step,
     run_local_sgd_epoch_simulated,
@@ -116,8 +116,8 @@ def test_local_sgd_step_and_simulated_epoch_match_mpi():
     for _ in range(3):
         idx = rng.permutation(X_b.shape[0])
         step_counter, syncs = run_local_sgd_epoch_simulated(
-            np.ascontiguousarray(X_b[idx]),
-            np.ascontiguousarray(y[idx]),
+            X_b[idx],
+            y[idx],
             worker_weights,
             batch_size=64,
             learning_rate=0.05,

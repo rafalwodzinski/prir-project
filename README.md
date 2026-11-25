@@ -83,7 +83,7 @@ Głównym celem badawczym jest **ocena przyspieszenia $S(p)$ i efektywności $E(
 │   └── test_benchmarks.py        # Testy funkcji pomiarowych i własności Prawa Amdahla
 ├── data/                         # Katalog na dane wejściowe (ignorowany w git)
 │   └── csgo_round_snapshots.csv  # Dataset CS:GO (~122k rund, opcjonalny - fallback na syntetyk)
-├── pyproject.toml                # Konfiguracja środowiska i pytest (pythonpath = ["src"])
+├── pyproject.toml                # Konfiguracja środowiska i pytest (pythonpath = ["."])
 ├── requirements.txt              # Zależności biblioteczne (numpy, pandas, scikit-learn, numba, mpi4py, matplotlib, pytest)
 └── README.md                     # Niniejsza dokumentacja
 ```
@@ -165,19 +165,19 @@ Projekt posiada zunifikowany interfejs wiersza poleceń [`src/main.py`](file:///
 
 ```bash
 # Wariant 1: Trening sekwencyjny (Baseline) z zapisem modelu i historii
-python src/main.py --mode seq --epochs 20 --batch-size 256 --lr 0.01 --target-acc 0.75 --save-model models/weights.npy --save-history reports/history.json
+python -m src.main --mode seq --epochs 20 --batch-size 256 --lr 0.01 --target-acc 0.75 --save-model models/weights.npy --save-history reports/history.json
 
 # Wariant 2: Wielowatkowy CPU (Numba / OpenMP)
-python src/main.py --mode numba --epochs 20 --batch-size 256 --lr 0.01
+python -m src.main --mode numba --epochs 20 --batch-size 256 --lr 0.01
 
 # Wariant 3: Klaster rozproszony MPI (np. 4 procesy robocze)
-mpiexec -n 4 python src/main.py --mode mpi --epochs 20 --batch-size 256 --lr 0.01
+mpiexec -n 4 python -m src.main --mode mpi --epochs 20 --batch-size 256 --lr 0.01
 
 # Wariant 4: Local SGD z rzadka synchronizacja co K=4 kroki
-mpiexec -n 4 python src/main.py --mode mpi --k 4 --epochs 20 --batch-size 256
+mpiexec -n 4 python -m src.main --mode mpi --k 4 --epochs 20 --batch-size 256
 
 # Wariant 5: Akceleracja GPU CUDA
-python src/main.py --mode cuda --epochs 20 --batch-size 256 --lr 0.01
+python -m src.main --mode cuda --epochs 20 --batch-size 256 --lr 0.01
 ```
 
 #### Dostępne parametry CLI:
@@ -203,16 +203,16 @@ Każdy moduł można również uruchomić niezależnie jako samodzielny skrypt:
 
 ```bash
 # Uruchomienie modelu sekwencyjnego
-python src/sequential_sgd.py
+python -m src.sequential_sgd
 
 # Uruchomienie modelu wielowatkowego Numba
-python src/numba_sgd.py
+python -m src.numba_sgd
 
 # Uruchomienie modelu rozproszonego MPI na 4 procesach
-mpiexec -n 4 python src/model_mpi.py
+mpiexec -n 4 python -m src.model_mpi
 
 # Uruchomienie modelu CUDA (lub CUDASIM)
-python src/cuda_sgd.py
+python -m src.cuda_sgd
 ```
 
 ---
@@ -232,20 +232,20 @@ Katalog `data/` jest ignorowany przez Git (`.gitignore`), dlatego osoba klonują
    ```
 3. (Opcjonalnie) Zweryfikuj poprawność wczytywania, format `C_CONTIGUOUS` i balans klas:
    ```bash
-   python scripts/verify_real_data.py
+   python -m scripts.verify_real_data
    ```
 *(Jeśli plik CSV nie istnieje, wszystkie skrypty automatycznie przełączają się na deterministyczny generator danych syntetycznych.)*
 
 #### Krok 2. Uruchomienie benchmarków CPU lokalnie
 ```bash
 # Pełny zestaw benchmarków (Sequential T_seq, OpenMP/Numba, MPI, Batch x K do 74% Accuracy + skalowanie rozmiaru danych):
-python scripts/run_benchmarks.py
+python -m scripts.run_benchmarks
 
 # Alternatywnie: odświeżenie tylko benchmarków CPU na CS:GO z zachowaniem istniejących wyników CUDA z Colaba w data_size_scaling:
-python scripts/run_benchmarks.py --skip-data-scaling
+python -m scripts.run_benchmarks --skip-data-scaling
 
 # Wygenerowanie wszystkich wykresów PNG do katalogu figures/ oraz podsumowania reports/cuda_results.json:
-python scripts/plot_results.py
+python -m scripts.plot_results
 ```
 
 #### Krok 3. Odtworzenie wyników GPU CUDA w Google Colab (Runtime → T4 GPU)
@@ -261,17 +261,17 @@ Na komputerach bez fizycznej karty NVIDIA (np. macOS Apple Silicon) wyniki CUDA 
 !mkdir -p data
 
 # 3a. Porównanie 20 epok CUDA vs Sequential na zbiorze CS:GO (batch=512, lr=0.003)
-!python src/main.py --mode seq  --epochs 20 --batch-size 512 --lr 0.003 --save-history reports/colab_seq_history.json
-!python src/main.py --mode cuda --epochs 20 --batch-size 512 --lr 0.003 --save-history reports/colab_cuda_history.json
+!python -m src.main --mode seq  --epochs 20 --batch-size 512 --lr 0.003 --save-history reports/colab_seq_history.json
+!python -m src.main --mode cuda --epochs 20 --batch-size 512 --lr 0.003 --save-history reports/colab_cuda_history.json
 
 # 3b. Skalowanie rozmiaru danych (100k, 500k, 1M, 5M próbek × 101 cech, batch=4096)
-!python scripts/run_benchmarks.py --only-data-scaling --batch-size 4096
+!python -m scripts.run_benchmarks --only-data-scaling --batch-size 4096
 
 # 4. Wygenerowanie wykresów i podsumowania CUDA
-!python scripts/plot_results.py
+!python -m scripts.plot_results
 ```
 
-Następnie pobierz z Colaba pliki `reports/colab_seq_history.json`, `reports/colab_cuda_history.json` oraz `reports/benchmark_results.json` do lokalnego katalogu `reports/` i uruchom ponownie `python scripts/plot_results.py`.
+Następnie pobierz z Colaba pliki `reports/colab_seq_history.json`, `reports/colab_cuda_history.json` oraz `reports/benchmark_results.json` do lokalnego katalogu `reports/` i uruchom ponownie `python -m scripts.plot_results`.
 
 #### Lista generowanych wykresów (`figures/`)
 * `figures/speedup_efficiency.png` – krzywe przyspieszenia $S(p)$ i efektywności $E(p)$ (względem `T_seq` oraz $T_1$) wraz z dopasowaniem Prawa Amdahla w zakresie $f \in [0\%, 99\%]$.

@@ -1,12 +1,8 @@
 from pathlib import Path
-import sys
 import time
 import numpy as np
 
-# Dodajemy src do sciezki, zeby importy dzialaly z poziomu scripts/
-sys.path.append(str(Path(__file__).resolve().parent.parent / "src"))
-
-from data_loader import load_and_preprocess_data, split_dataset, scale_features
+from src.data_loader import load_and_preprocess_data, split_dataset, scale_features
 
 
 def main():

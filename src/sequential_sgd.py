@@ -4,8 +4,8 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-from data_loader import add_intercept, prepare_dataset  # noqa: F401  (add_intercept re-eksportowany)
-from math_utils import sigmoid, compute_bce_loss, compute_gradient
+from src.data_loader import add_intercept, prepare_dataset  # noqa: F401  (add_intercept re-eksportowany)
+from src.math_utils import sigmoid, compute_bce_loss, compute_gradient
 
 
 def compute_accuracy(y_true: NDArray[Any], y_pred_probs: NDArray[Any], threshold: float = 0.5) -> float:
@@ -57,10 +57,10 @@ def train_sequential_sgd(
     for epoch in range(1, epochs + 1):
         t0 = time.perf_counter()
 
-        # 1. Tasowanie zbioru na poczatku kazdej epoki
+        # 1. Tasowanie zbioru na poczatku kazdej epoki (fancy indexing zwraca juz ciagla tablice)
         indices = rng.permutation(n_samples)
-        X_shuffled = np.ascontiguousarray(X_train[indices])
-        y_shuffled = np.ascontiguousarray(y_train[indices])
+        X_shuffled = X_train[indices]
+        y_shuffled = y_train[indices]
 
         # 2. Dzielenie na Mini-Batche -> Gradient -> Aktualizacja Wag
         for start_idx in range(0, n_samples, batch_size):

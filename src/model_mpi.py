@@ -25,9 +25,9 @@ except (ImportError, RuntimeError):
 
     MPI = DummyMPI()  # type: ignore
 
-from data_loader import prepare_dataset
-from math_utils import sigmoid, compute_bce_loss
-from sequential_sgd import compute_accuracy, predict_proba, generate_synthetic_dataset
+from src.data_loader import prepare_dataset
+from src.math_utils import sigmoid, compute_bce_loss
+from src.sequential_sgd import compute_accuracy, predict_proba, generate_synthetic_dataset
 
 
 def split_batch_for_rank(
@@ -94,8 +94,8 @@ def train_mpi_sgd(
         t0 = time.perf_counter()
 
         indices = rng.permutation(n_samples)
-        X_shuffled = np.ascontiguousarray(X_train[indices])
-        y_shuffled = np.ascontiguousarray(y_train[indices])
+        X_shuffled = X_train[indices]
+        y_shuffled = y_train[indices]
 
         for start_idx in range(0, n_samples, batch_size):
             end_idx = start_idx + batch_size
@@ -283,8 +283,8 @@ def train_local_sgd_mpi(
         t0 = time.perf_counter()
 
         indices = rng.permutation(n_samples)
-        X_shuffled = np.ascontiguousarray(X_train[indices])
-        y_shuffled = np.ascontiguousarray(y_train[indices])
+        X_shuffled = X_train[indices]
+        y_shuffled = y_train[indices]
 
         for start_idx in range(0, n_samples, batch_size):
             end_idx = start_idx + batch_size

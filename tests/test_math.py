@@ -2,7 +2,7 @@ import warnings
 import numpy as np
 import pytest
 
-from math_utils import sigmoid, compute_bce_loss, compute_gradient
+from src.math_utils import sigmoid, compute_bce_loss, compute_gradient
 
 
 def test_sigmoid_overflow_protection():

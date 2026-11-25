@@ -5,7 +5,7 @@ import sys
 import numpy as np
 import pytest
 
-from main import (
+from src.main import (
     parse_args,
     save_model,
     load_model,
@@ -132,7 +132,7 @@ def test_cli_end_to_end_execution(tmp_path: Path):
 
     cmd = [
         sys.executable,
-        str(repo_root / "src" / "main.py"),
+        "-m", "src.main",
         "--mode", "seq",
         "--epochs", "5",
         "--batch-size", "128",

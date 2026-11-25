@@ -12,14 +12,9 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-# Upewniamy sie, ze katalog src jest w sys.path
-SRC_DIR = Path(__file__).resolve().parent
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
-
-from data_loader import add_intercept, prepare_dataset, prepare_train_test
-from sequential_sgd import generate_synthetic_dataset, train_sequential_sgd
-from numba_sgd import train_numba_sgd
+from src.data_loader import add_intercept, prepare_dataset, prepare_train_test
+from src.sequential_sgd import generate_synthetic_dataset, train_sequential_sgd
+from src.numba_sgd import train_numba_sgd
 
 
 def save_model(
@@ -282,7 +277,10 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         "--k",
         type=int,
         default=4,
-        help="Czestotliwosc synchronizacji K dla wariantu MPI Local SGD",
+        help=(
+            "Czestotliwosc synchronizacji K dla MPI Local SGD "
+            "(dla K <= 1 uruchamiany jest synchroniczny MPI SGD z Allreduce gradientow po kazdym batchu)"
+        ),
     )
     parser.add_argument(
         "--synthetic-samples",
@@ -402,7 +400,9 @@ def run_training(args: argparse.Namespace) -> tuple[NDArray[Any], dict[str, Any]
 
     elif args.mode == "mpi":
         if args.k and args.k > 1:
-            from model_mpi import train_local_sgd_mpi
+            if verbose:
+                print(f"[MPI] Tryb Local SGD (K={args.k} -> Allreduce wag co {args.k} krokow).")
+            from src.model_mpi import train_local_sgd_mpi
             weights, history = train_local_sgd_mpi(
                 X_train_final,
                 y_train,
@@ -417,7 +417,12 @@ def run_training(args: argparse.Namespace) -> tuple[NDArray[Any], dict[str, Any]
                 verbose=verbose,
             )
         else:
-            from model_mpi import train_mpi_sgd
+            if verbose:
+                print(
+                    f"[MPI] Uwaga: --k={args.k} (<= 1) przelacza na synchroniczny Data-Parallel MPI SGD "
+                    "(Allreduce gradientow po kazdym batchu zamiast Local SGD)."
+                )
+            from src.model_mpi import train_mpi_sgd
             weights, history = train_mpi_sgd(
                 X_train_final,
                 y_train,
@@ -432,7 +437,7 @@ def run_training(args: argparse.Namespace) -> tuple[NDArray[Any], dict[str, Any]
             )
 
     elif args.mode == "cuda":
-        from cuda_sgd import train_cuda_sgd
+        from src.cuda_sgd import train_cuda_sgd
         weights, history = train_cuda_sgd(
             X_train_final,
             y_train,
