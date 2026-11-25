@@ -95,6 +95,51 @@ def measure_median_time(
     return median_t, times
 
 
+def benchmark_sequential_baseline(
+    X: np.ndarray,
+    y: np.ndarray,
+    epochs: int = 5,
+    batch_size: int = 256,
+    seed: int = 42,
+    warmup_runs: int = 1,
+    measurement_runs: int = 5,
+) -> dict[str, Any]:
+    """
+    Mierzy czas wykonania bazowej wersji sekwencyjnej (NumPy, 1 watek)
+    jako sume czasow epok SGD (bez ewaluacji), w pelni spojna z OpenMP i MPI.
+    Zwraca slownik z mediana T_seq oraz probkami.
+    """
+    print(f"\n--- Benchmark Sequential Baseline (NumPy 1T, epochs={epochs}, batch={batch_size}) ---")
+
+    def run_once() -> float:
+        _, hist = train_sequential_sgd(
+            X,
+            y,
+            epochs=epochs,
+            batch_size=batch_size,
+            learning_rate=0.01,
+            seed=seed,
+            verbose=False,
+        )
+        return float(sum(hist.get("epoch_times", [])))
+
+    for _ in range(warmup_runs):
+        run_once()
+
+    samples = [run_once() for _ in range(measurement_runs)]
+    med_time = float(np.median(samples))
+    print(f"Sequential T_seq | Mediana: {med_time:.4f}s | Probki: {[round(s, 4) for s in samples]}")
+
+    return {
+        "median_time": med_time,
+        "samples": samples,
+        "min_time": float(np.min(samples)),
+        "max_time": float(np.max(samples)),
+        "epochs": epochs,
+        "batch_size": batch_size,
+    }
+
+
 def benchmark_openmp_numba(
     X: np.ndarray,
     y: np.ndarray,
@@ -102,10 +147,12 @@ def benchmark_openmp_numba(
     epochs: int = 5,
     batch_size: int = 256,
     seed: int = 42,
+    baseline_seq_time: float | None = None,
 ) -> dict[str, Any]:
     """
     Bada skalowalnosc wielowatkowej implementacji Numba (odpowiednik OpenMP na CPU).
-    Mierzy czasy dla roznych liczb watkow z uzyciem set_num_threads.
+    Mierzy czasy epok dla roznych liczb watkow z uzyciem set_num_threads.
+    Liczy skalowanie wzgledem T_1 oraz (gdy podano baseline_seq_time) wzgledem T_seq.
     """
     max_cores = os.cpu_count() or 4
     if thread_counts is None:
@@ -121,8 +168,8 @@ def benchmark_openmp_numba(
     for t in thread_counts:
         set_num_threads(t)
 
-        def run_once() -> None:
-            train_numba_sgd(
+        def run_once() -> float:
+            _, hist = train_numba_sgd(
                 X,
                 y,
                 epochs=epochs,
@@ -131,8 +178,12 @@ def benchmark_openmp_numba(
                 seed=seed,
                 verbose=False,
             )
+            return float(sum(hist.get("epoch_times", [])))
 
-        med_time, samples = measure_median_time(run_once, warmup_runs=1, measurement_runs=5)
+        # 1 rozgrzewka + 5 pomiarow sumy czasow epok (spojne z T_seq i MPI)
+        run_once()
+        samples = [run_once() for _ in range(5)]
+        med_time = float(np.median(samples))
         print(f"Watki p={t:2d} | Mediana: {med_time:.4f}s | Probki: {[round(s, 4) for s in samples]}")
 
         results_by_threads[t] = {
@@ -144,6 +195,7 @@ def benchmark_openmp_numba(
         }
 
     # Obliczamy przyspieszenie S(p) = T_1 / T_p oraz efektywnosc E(p) = S(p) / p
+    # a takze przyspieszenie i efektywnosc wzgledem bazowego T_seq (NumPy)
     t1 = results_by_threads[thread_counts[0]]["median_time"]
     for t in thread_counts:
         tp = results_by_threads[t]["median_time"]
@@ -151,12 +203,19 @@ def benchmark_openmp_numba(
         efficiency = speedup / t
         results_by_threads[t]["speedup"] = float(speedup)
         results_by_threads[t]["efficiency"] = float(efficiency)
+        if baseline_seq_time is not None:
+            speedup_seq = baseline_seq_time / tp if tp > 0 else 0.0
+            results_by_threads[t]["speedup_vs_seq"] = float(speedup_seq)
+            results_by_threads[t]["efficiency_vs_seq"] = float(speedup_seq / t)
 
-    return {
+    result: dict[str, Any] = {
         "thread_counts": thread_counts,
         "results": {str(k): v for k, v in results_by_threads.items()},
         "baseline_time_t1": t1,
     }
+    if baseline_seq_time is not None:
+        result["baseline_time_seq"] = float(baseline_seq_time)
+    return result
 
 
 def simulate_local_sgd_multiprocess(
@@ -227,6 +286,7 @@ def benchmark_mpi_scaling(
     batch_size: int = 256,
     sync_freq_k: int = 4,
     seed: int = 42,
+    baseline_seq_time: float | None = None,
 ) -> dict[str, Any]:
     """
     Bada skalowalnosc rozproszonego Local SGD dla roznych liczb procesow p.
@@ -318,7 +378,7 @@ def benchmark_mpi_scaling(
             "max_time": float(np.max(samples)),
         }
 
-    # Przyspieszenie i efektywnosc
+    # Przyspieszenie i efektywnosc wzgledem T_1 oraz (opcjonalnie) wzgledem T_seq
     t1 = results_by_procs[process_counts[0]]["median_time"]
     for p in process_counts:
         tp = results_by_procs[p]["median_time"]
@@ -326,12 +386,19 @@ def benchmark_mpi_scaling(
         efficiency = speedup / p
         results_by_procs[p]["speedup"] = float(speedup)
         results_by_procs[p]["efficiency"] = float(efficiency)
+        if baseline_seq_time is not None:
+            speedup_seq = baseline_seq_time / tp if tp > 0 else 0.0
+            results_by_procs[p]["speedup_vs_seq"] = float(speedup_seq)
+            results_by_procs[p]["efficiency_vs_seq"] = float(speedup_seq / p)
 
-    return {
+    result: dict[str, Any] = {
         "process_counts": process_counts,
         "results": {str(k): v for k, v in results_by_procs.items()},
         "baseline_time_t1": t1,
     }
+    if baseline_seq_time is not None:
+        result["baseline_time_seq"] = float(baseline_seq_time)
+    return result
 
 
 def benchmark_batch_and_k_sensitivity(
@@ -655,6 +722,7 @@ def run_full_benchmark_suite(
     seed: int = 42,
     sample_sizes: list[int] | None = None,
     data_scaling_features: int = 100,
+    skip_data_scaling: bool = False,
 ) -> dict[str, Any]:
     """
     Glowna funkcja uruchamiajaca caly zestaw pomiarow i zapisujaca wyniki do pliku JSON.
@@ -662,6 +730,14 @@ def run_full_benchmark_suite(
     if output_path is None:
         output_path = REPO_ROOT / "reports" / "benchmark_results.json"
     output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    existing_data_size_scaling: dict[str, Any] | None = None
+    if skip_data_scaling and output_path.is_file():
+        try:
+            with open(output_path, "r", encoding="utf-8") as f:
+                existing_data_size_scaling = json.load(f).get("data_size_scaling")
+        except Exception:
+            existing_data_size_scaling = None
 
     print("================================================================")
     print("ROZPOCZECIE BENCHMARKOW WYDAJNOSCIOWYCH (PRiR Issue #9)")
@@ -689,6 +765,16 @@ def run_full_benchmark_suite(
 
     print(f"Dane do eksperymentow: {X_scale.shape[0]} probek, {X_scale.shape[1]} cech")
 
+    # 0. Benchmark Sequential Baseline (NumPy 1T) - punkt odniesienia T_seq
+    seq_data = benchmark_sequential_baseline(
+        X_scale,
+        y_scale,
+        epochs=3,
+        batch_size=512,
+        seed=seed,
+    )
+    t_seq = seq_data["median_time"]
+
     # 1. Benchmark OpenMP / Numba
     openmp_data = benchmark_openmp_numba(
         X_scale,
@@ -697,6 +783,7 @@ def run_full_benchmark_suite(
         epochs=3,
         batch_size=512,
         seed=seed,
+        baseline_seq_time=t_seq,
     )
 
     # 2. Benchmark MPI Scaling
@@ -708,6 +795,7 @@ def run_full_benchmark_suite(
         batch_size=512,
         sync_freq_k=4,
         seed=seed,
+        baseline_seq_time=t_seq,
     )
 
     # 3. Analiza Batch Size i parametru K na czas osiagniecia 74% accuracy (dane CS:GO)
@@ -724,15 +812,19 @@ def run_full_benchmark_suite(
     )
 
     # 4. Skalowanie wzgledem rozmiaru danych (seq, Numba, MPI, CUDA)
-    data_size_data = benchmark_data_size_scaling(
-        sample_sizes=sample_sizes,
-        n_features=data_scaling_features,
-        epochs=4,
-        batch_size=512,
-        seed=seed,
-    )
+    if skip_data_scaling:
+        data_size_data = existing_data_size_scaling
+        print("\n[Info] Pominieto data_size_scaling (--skip-data-scaling); zachowano istniejace wyniki.")
+    else:
+        data_size_data = benchmark_data_size_scaling(
+            sample_sizes=sample_sizes,
+            n_features=data_scaling_features,
+            epochs=4,
+            batch_size=512,
+            seed=seed,
+        )
 
-    full_report = {
+    full_report: dict[str, Any] = {
         "metadata": {
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
             "seed": seed,
@@ -744,11 +836,13 @@ def run_full_benchmark_suite(
                 "cuda.synchronize() bezposrednio przed i po pomiarze."
             ),
         },
+        "sequential_baseline": seq_data,
         "openmp_benchmark": openmp_data,
         "mpi_benchmark": mpi_data,
         "batch_k_sensitivity": batch_k_data,
-        "data_size_scaling": data_size_data,
     }
+    if data_size_data is not None:
+        full_report["data_size_scaling"] = data_size_data
 
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(full_report, f, indent=2, ensure_ascii=False)
@@ -763,6 +857,11 @@ def main() -> None:
         "--only-data-scaling",
         action="store_true",
         help="Uruchamia tylko eksperyment skalowania rozmiaru danych i aktualizuje benchmark_results.json",
+    )
+    parser.add_argument(
+        "--skip-data-scaling",
+        action="store_true",
+        help="Pomija eksperyment data_size_scaling i zachowuje istniejace wyniki z JSON (np. z Colaba)",
     )
     parser.add_argument(
         "--sizes",
@@ -821,6 +920,7 @@ def main() -> None:
             output_path=output_path,
             sample_sizes=args.sizes,
             data_scaling_features=args.features,
+            skip_data_scaling=args.skip_data_scaling,
         )
 
 

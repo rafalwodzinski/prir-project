@@ -4,12 +4,19 @@ import tempfile
 import numpy as np
 import pytest
 
-from scripts.run_benchmarks import benchmark_data_size_scaling, measure_median_time, get_hardware_info
+from scripts.run_benchmarks import (
+    benchmark_data_size_scaling,
+    benchmark_openmp_numba,
+    benchmark_sequential_baseline,
+    measure_median_time,
+    get_hardware_info,
+)
 from scripts.plot_results import (
     compute_amdahl_speedup,
     fit_parallel_fraction,
     plot_speedup_and_efficiency,
     plot_batch_and_k_analysis,
+    plot_execution_time_comparison,
     plot_data_size_scaling,
 )
 
@@ -170,3 +177,49 @@ def test_data_size_scaling_runner_and_plot(tmp_path: Path):
     plot_data_size_scaling({"data_size_scaling": res_with_cuda}, output_path=out_plot)
     assert out_plot.is_file()
     assert out_plot.stat().st_size > 1000
+
+
+def test_sequential_baseline_and_speedup_vs_seq(tmp_path: Path):
+    """
+    Weryfikuje pomiar T_seq (benchmark_sequential_baseline), wyznaczanie speedup_vs_seq
+    i efficiency_vs_seq z zachowaniem skalowania wzgledem T_1 oraz generowanie wykresow.
+    """
+    rng = np.random.default_rng(42)
+    X = rng.standard_normal((500, 8), dtype=np.float32)
+    y = rng.integers(0, 2, size=500).astype(np.float32)
+
+    seq = benchmark_sequential_baseline(X, y, epochs=2, batch_size=64, seed=42, warmup_runs=1, measurement_runs=3)
+    assert seq["median_time"] > 0
+    assert len(seq["samples"]) == 3
+
+    omp = benchmark_openmp_numba(
+        X, y, thread_counts=[1, 2], epochs=2, batch_size=64, seed=42, baseline_seq_time=seq["median_time"]
+    )
+    assert np.isclose(omp["baseline_time_seq"], seq["median_time"])
+    for t_str, row in omp["results"].items():
+        t = int(t_str)
+        assert np.isclose(row["speedup_vs_seq"], seq["median_time"] / row["median_time"])
+        assert np.isclose(row["efficiency_vs_seq"], row["speedup_vs_seq"] / t)
+        assert "speedup" in row and "efficiency" in row
+
+    mock_mpi = {
+        "process_counts": [1, 2],
+        "baseline_time_t1": 0.02,
+        "baseline_time_seq": seq["median_time"],
+        "results": {
+            "1": {"median_time": 0.02, "speedup": 1.0, "efficiency": 1.0, "speedup_vs_seq": seq["median_time"] / 0.02, "efficiency_vs_seq": seq["median_time"] / 0.02},
+            "2": {"median_time": 0.015, "speedup": 0.02 / 0.015, "efficiency": (0.02 / 0.015) / 2, "speedup_vs_seq": seq["median_time"] / 0.015, "efficiency_vs_seq": (seq["median_time"] / 0.015) / 2},
+        },
+    }
+    report = {
+        "metadata": {"seed": 42, "hardware": {"processor": "Test", "cpu_count_logical": 4}},
+        "sequential_baseline": seq,
+        "openmp_benchmark": omp,
+        "mpi_benchmark": mock_mpi,
+    }
+    out_se = tmp_path / "se.png"
+    out_time = tmp_path / "time.png"
+    plot_speedup_and_efficiency(report, output_path=out_se)
+    plot_execution_time_comparison(report, output_path=out_time)
+    assert out_se.is_file() and out_se.stat().st_size > 1000
+    assert out_time.is_file() and out_time.stat().st_size > 1000

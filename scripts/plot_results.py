@@ -65,16 +65,24 @@ def plot_speedup_and_efficiency(
 
     openmp = benchmark_data.get("openmp_benchmark", {})
     mpi = benchmark_data.get("mpi_benchmark", {})
+    seq_base = benchmark_data.get("sequential_baseline", {})
+    t_seq = seq_base.get("median_time")
 
     omp_threads = [int(t) for t in openmp.get("thread_counts", [1, 2, 4, 8])]
     omp_speedup = [openmp["results"][str(t)]["speedup"] for t in omp_threads]
     omp_eff = [openmp["results"][str(t)]["efficiency"] * 100 for t in omp_threads]
+    has_omp_seq = all("speedup_vs_seq" in openmp["results"][str(t)] for t in omp_threads)
+    omp_speedup_seq = [openmp["results"][str(t)]["speedup_vs_seq"] for t in omp_threads] if has_omp_seq else []
+    omp_eff_seq = [openmp["results"][str(t)]["efficiency_vs_seq"] * 100 for t in omp_threads] if has_omp_seq else []
 
     mpi_procs = [int(p) for p in mpi.get("process_counts", [1, 2, 4, 8])]
     mpi_speedup = [mpi["results"][str(p)]["speedup"] for p in mpi_procs]
     mpi_eff = [mpi["results"][str(p)]["efficiency"] * 100 for p in mpi_procs]
+    has_mpi_seq = all("speedup_vs_seq" in mpi["results"][str(p)] for p in mpi_procs)
+    mpi_speedup_seq = [mpi["results"][str(p)]["speedup_vs_seq"] for p in mpi_procs] if has_mpi_seq else []
+    mpi_eff_seq = [mpi["results"][str(p)]["efficiency_vs_seq"] * 100 for p in mpi_procs] if has_mpi_seq else []
 
-    # Teoretyczne Prawo Amdahla dla Numba/OpenMP
+    # Teoretyczne Prawo Amdahla dla Numba/OpenMP (skalowanie wzgledem T_1)
     f_fit = fit_parallel_fraction(omp_threads, omp_speedup)
     p_dense = np.linspace(1, max(max(omp_threads), max(mpi_procs)), 100)
     amdahl_dense = compute_amdahl_speedup(p_dense, f_fit)
@@ -84,35 +92,55 @@ def plot_speedup_and_efficiency(
 
     # --- Panel 1: Przyspieszenie S(p) ---
     max_p = max(max(omp_threads), max(mpi_procs))
-    ax_s.plot([1, max_p], [1, max_p], "k--", alpha=0.7, label="Idealne skalowanie S(p) = p")
-    ax_s.plot(p_dense, amdahl_dense, "r:", linewidth=2, label=f"Prawo Amdahla (f={f_fit*100:.1f}%)")
-    ax_s.plot(omp_threads, omp_speedup, "o-", color="#1f77b4", linewidth=2.2, markersize=7, label="OpenMP / Numba CPU")
-    ax_s.plot(mpi_procs, mpi_speedup, "s-", color="#2ca02c", linewidth=2.2, markersize=7, label="MPI / Local SGD")
+    ax_s.plot([1, max_p], [1, max_p], "k--", alpha=0.5, label="Idealne skalowanie S(p) = p")
+    ax_s.plot(p_dense, amdahl_dense, "r:", linewidth=1.8, label=f"Prawo Amdahla (f={f_fit*100:.1f}%)")
+    if has_omp_seq or has_mpi_seq:
+        ax_s.axhline(1.0, color="#444444", linestyle="-.", alpha=0.7, linewidth=1.2, label="Baseline Sequential (S = 1.0)")
+    if has_omp_seq:
+        ax_s.plot(omp_threads, omp_speedup_seq, "o-", color="#1f77b4", linewidth=2.4, markersize=7, label="OpenMP / Numba vs T_seq")
+        ax_s.plot(omp_threads, omp_speedup, "o--", color="#1f77b4", linewidth=1.4, markersize=5, alpha=0.65, label="OpenMP / Numba vs T₁")
+    else:
+        ax_s.plot(omp_threads, omp_speedup, "o-", color="#1f77b4", linewidth=2.2, markersize=7, label="OpenMP / Numba CPU")
+    if has_mpi_seq:
+        ax_s.plot(mpi_procs, mpi_speedup_seq, "s-", color="#2ca02c", linewidth=2.4, markersize=7, label="MPI / Local SGD vs T_seq")
+        ax_s.plot(mpi_procs, mpi_speedup, "s--", color="#2ca02c", linewidth=1.4, markersize=5, alpha=0.65, label="MPI / Local SGD vs T₁")
+    else:
+        ax_s.plot(mpi_procs, mpi_speedup, "s-", color="#2ca02c", linewidth=2.2, markersize=7, label="MPI / Local SGD")
 
     ax_s.set_title("Przyspieszenie S(p) w funkcji liczby wątków / procesów", fontsize=12, fontweight="bold")
     ax_s.set_xlabel("Liczba wątków / procesów p [-]", fontsize=11)
     ax_s.set_ylabel("Przyspieszenie S(p) [-]", fontsize=11)
     ax_s.set_xticks(omp_threads)
+    ax_s.set_ylim(bottom=0)
     ax_s.grid(True, linestyle="--", alpha=0.5)
-    ax_s.legend(fontsize=10, loc="upper left")
+    ax_s.legend(fontsize=8.5, loc="upper left")
 
     # --- Panel 2: Efektywnosc E(p) ---
-    ax_e.axhline(100, color="k", linestyle="--", alpha=0.7, label="Idealna efektywność E(p) = 100%")
-    ax_e.plot(omp_threads, omp_eff, "o-", color="#1f77b4", linewidth=2.2, markersize=7, label="OpenMP / Numba CPU")
-    ax_e.plot(mpi_procs, mpi_eff, "s-", color="#2ca02c", linewidth=2.2, markersize=7, label="MPI / Local SGD")
+    ax_e.axhline(100, color="k", linestyle="--", alpha=0.6, label="Idealna efektywność E(p) = 100%")
+    if has_omp_seq:
+        ax_e.plot(omp_threads, omp_eff_seq, "o-", color="#1f77b4", linewidth=2.4, markersize=7, label="OpenMP / Numba vs T_seq")
+        ax_e.plot(omp_threads, omp_eff, "o--", color="#1f77b4", linewidth=1.4, markersize=5, alpha=0.65, label="OpenMP / Numba vs T₁")
+    else:
+        ax_e.plot(omp_threads, omp_eff, "o-", color="#1f77b4", linewidth=2.2, markersize=7, label="OpenMP / Numba CPU")
+    if has_mpi_seq:
+        ax_e.plot(mpi_procs, mpi_eff_seq, "s-", color="#2ca02c", linewidth=2.4, markersize=7, label="MPI / Local SGD vs T_seq")
+        ax_e.plot(mpi_procs, mpi_eff, "s--", color="#2ca02c", linewidth=1.4, markersize=5, alpha=0.65, label="MPI / Local SGD vs T₁")
+    else:
+        ax_e.plot(mpi_procs, mpi_eff, "s-", color="#2ca02c", linewidth=2.2, markersize=7, label="MPI / Local SGD")
 
     ax_e.set_title("Efektywność E(p) w funkcji liczby wątków / procesów", fontsize=12, fontweight="bold")
     ax_e.set_xlabel("Liczba wątków / procesów p [-]", fontsize=11)
     ax_e.set_ylabel("Efektywność E(p) [%]", fontsize=11)
     ax_e.set_xticks(omp_threads)
-    ax_e.set_ylim(0, 110)
+    ax_e.set_ylim(0, max(110, max(omp_eff_seq + mpi_eff_seq + [100]) * 1.1))
     ax_e.grid(True, linestyle="--", alpha=0.5)
-    ax_e.legend(fontsize=10, loc="lower left")
+    ax_e.legend(fontsize=8.5, loc="upper right")
 
-    # Podpis ze sprzetem i ziarnem losowosci
+    # Podpis ze sprzetem, baseline T_seq i ziarnem losowosci
+    seq_info = f" | Baseline T_seq={t_seq:.4f}s" if t_seq is not None else ""
     fig.suptitle(
         f"Ewaluacja skalowalności algorytmu Mini-Batch SGD (PRiR)\n"
-        f"Sprzęt: {cpu_name} ({cpu_cores} rdzeni logicznych) | Ziarno losowości: seed={seed} | Pomiary: mediana z 5 prób",
+        f"Sprzęt: {cpu_name} ({cpu_cores} rdzeni logicznych) | seed={seed} | mediana z 5 prób{seq_info}",
         fontsize=11,
         y=1.03,
     )
@@ -233,6 +261,8 @@ def plot_execution_time_comparison(
 
     openmp = benchmark_data.get("openmp_benchmark", {})
     mpi = benchmark_data.get("mpi_benchmark", {})
+    seq_base = benchmark_data.get("sequential_baseline", {})
+    t_seq = seq_base.get("median_time")
 
     omp_threads = [int(t) for t in openmp.get("thread_counts", [1, 2, 4, 8])]
     omp_times = [openmp["results"][str(t)]["median_time"] for t in omp_threads]
@@ -242,6 +272,14 @@ def plot_execution_time_comparison(
 
     fig, ax = plt.subplots(figsize=(8, 5), dpi=300)
 
+    if t_seq is not None:
+        ax.axhline(
+            t_seq,
+            color="#444444",
+            linestyle="--",
+            linewidth=2,
+            label=f"Sequential baseline (NumPy 1T): T_seq = {t_seq:.3f}s",
+        )
     ax.plot(omp_threads, omp_times, "o-", color="#1f77b4", linewidth=2, label="OpenMP / Numba CPU (wątki)")
     ax.plot(mpi_procs, mpi_times, "s-", color="#2ca02c", linewidth=2, label="MPI / Local SGD (procesy)")
 
