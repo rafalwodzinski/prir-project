@@ -103,6 +103,9 @@ def measure_median_time(
     return median_t, times
 
 
+TIMING_SCOPE_DESC = "sum(epoch_times) po rozgrzewce JIT (wylacznie matematyka SGD + komunikacja, bez I/O i ewaluacji)"
+
+
 def benchmark_sequential_baseline(
     X: np.ndarray,
     y: np.ndarray,
@@ -145,6 +148,7 @@ def benchmark_sequential_baseline(
         "max_time": float(np.max(samples)),
         "epochs": epochs,
         "batch_size": batch_size,
+        "timing_scope": TIMING_SCOPE_DESC,
     }
 
 
@@ -220,6 +224,7 @@ def benchmark_openmp_numba(
         "thread_counts": thread_counts,
         "results": {str(k): v for k, v in results_by_threads.items()},
         "baseline_time_t1": t1,
+        "timing_scope": TIMING_SCOPE_DESC,
     }
     if baseline_seq_time is not None:
         result["baseline_time_seq"] = float(baseline_seq_time)
@@ -248,8 +253,10 @@ def simulate_local_sgd_multiprocess(
     worker_weights = [np.zeros(n_features, dtype=X_train.dtype) for _ in range(n_workers)]
     step_counter = 0
     sync_count = 0
+    epoch_times: list[float] = []
 
     for epoch in range(1, epochs + 1):
+        t0 = time.perf_counter()
         indices = rng.permutation(n_samples)
         X_shuffled = np.ascontiguousarray(X_train[indices])
         y_shuffled = np.ascontiguousarray(y_train[indices])
@@ -283,7 +290,9 @@ def simulate_local_sgd_multiprocess(
                 worker_weights[rank][:] = avg_weights
             sync_count += 1
 
-    return worker_weights[0], {"sync_count": sync_count}
+        epoch_times.append(time.perf_counter() - t0)
+
+    return worker_weights[0], {"sync_count": sync_count, "epoch_times": epoch_times}
 
 
 def benchmark_mpi_scaling(
@@ -310,6 +319,7 @@ def benchmark_mpi_scaling(
 
     mpiexec_bin = shutil.which("mpiexec")
     backend_desc = "Rzeczywiste mpiexec" if mpiexec_bin else "Fallback symulator"
+    backend_used = "mpiexec" if mpiexec_bin else "simulator"
     print(f"\n--- Benchmark MPI / Local SGD Scaling ({backend_desc}, procesy: {process_counts}, K={sync_freq_k}) ---")
     results_by_procs: dict[int, dict[str, Any]] = {}
 
@@ -359,11 +369,12 @@ def benchmark_mpi_scaling(
                     samples.append(run_mpi_real())
             except Exception as exc:
                 print(f"[Warn] Blad uruchomienia mpiexec dla p={p} ({exc}), przelaczam na symulator.")
+                backend_used = "simulator"
                 samples = []
 
         if not samples:
-            def run_sim() -> None:
-                simulate_local_sgd_multiprocess(
+            def run_sim() -> float:
+                _, hist = simulate_local_sgd_multiprocess(
                     X,
                     y,
                     n_workers=p,
@@ -373,7 +384,10 @@ def benchmark_mpi_scaling(
                     sync_freq_k=sync_freq_k,
                     seed=seed,
                 )
-            _, samples = measure_median_time(run_sim, warmup_runs=1, measurement_runs=5)
+                return float(sum(hist.get("epoch_times", [])))
+            # 1 rozgrzewka + 5 pomiarow sumy epoch_times (spojne z mpiexec, T_seq i Numba)
+            run_sim()
+            samples = [run_sim() for _ in range(5)]
 
         med_time = float(np.median(samples))
         print(f"Procesy p={p:2d} | Mediana: {med_time:.4f}s | Probki: {[round(s, 4) for s in samples]}")
@@ -401,6 +415,8 @@ def benchmark_mpi_scaling(
 
     result: dict[str, Any] = {
         "process_counts": process_counts,
+        "backend": backend_used,
+        "timing_scope": TIMING_SCOPE_DESC,
         "results": {str(k): v for k, v in results_by_procs.items()},
         "baseline_time_t1": t1,
     }
@@ -845,6 +861,13 @@ def run_full_benchmark_suite(
                 "Do wiarygodnego pomiaru czasu kerneli konieczne jest wywolanie "
                 "cuda.synchronize() bezposrednio przed i po pomiarze."
             ),
+            "timing_methodology": {
+                "scope": TIMING_SCOPE_DESC,
+                "sequential": "Suma epoch_times (tasowanie + mini-batch SGD NumPy/BLAS, bez I/O i bez ewaluacji predict_proba), mediana z 5 prob po 1 rozgrzewce.",
+                "openmp_numba": "Suma epoch_times (tasowanie + kernel @njit(parallel=True) prange + redukcja, bez kompilacji JIT, I/O i ewaluacji), mediana z 5 prob po 1 rozgrzewce.",
+                "mpi": "Suma epoch_times procesu rank=0 (tasowanie + lokalne SGD NumPy + Allreduce co K krokow, bez startu mpiexec, I/O i ewaluacji), mediana z 5 prob po 1 rozgrzewce.",
+                "cuda": "Czas pojedynczej epoki otoczony cuda.synchronize() (przeslanie indeksow int32 + 3 kernele GPU, bez transferu macierzy X do VRAM, bez kompilacji JIT z 1. epoki i bez ewaluacji).",
+            },
         },
         "sequential_baseline": seq_data,
         "openmp_benchmark": openmp_data,

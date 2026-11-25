@@ -192,10 +192,12 @@ def test_sequential_baseline_and_speedup_vs_seq(tmp_path: Path):
     seq = benchmark_sequential_baseline(X, y, epochs=2, batch_size=64, seed=42, warmup_runs=1, measurement_runs=3)
     assert seq["median_time"] > 0
     assert len(seq["samples"]) == 3
+    assert "timing_scope" in seq
 
     omp = benchmark_openmp_numba(
         X, y, thread_counts=[1, 2], epochs=2, batch_size=64, seed=42, baseline_seq_time=seq["median_time"]
     )
+    assert omp["timing_scope"] == seq["timing_scope"]
     assert np.isclose(omp["baseline_time_seq"], seq["median_time"])
     for t_str, row in omp["results"].items():
         t = int(t_str)

@@ -288,7 +288,12 @@ def plot_execution_time_comparison(
     for p, tm in zip(mpi_procs, mpi_times):
         ax.annotate(f"{tm:.3f}s", (p, tm), textcoords="offset points", xytext=(0, -12), ha="center", fontsize=8)
 
-    ax.set_title("Czas wykonania treningu T(p) w funkcji liczby jednostek obliczeniowych", fontsize=11, fontweight="bold")
+    ax.set_title(
+        "Czas wykonania treningu T(p) w funkcji liczby jednostek obliczeniowych\n"
+        "(jednolity zakres pomiaru: suma epoch_times po rozgrzewce JIT, bez I/O i ewaluacji)",
+        fontsize=10.5,
+        fontweight="bold",
+    )
     ax.set_xlabel("Liczba wątków / procesów p [-]", fontsize=10)
     ax.set_ylabel("Mediana czasu wykonania T(p) [s]", fontsize=10)
     ax.set_xticks(omp_threads)
