@@ -308,12 +308,34 @@ def summarize_cuda_vs_seq(seq_hist: dict[str, Any], cuda_hist: dict[str, Any]) -
     Podsumowanie porownania CUDA vs sekwencyjny (oba uruchomione w tym samym srodowisku, np. Colab).
     Pierwsza epoka CUDA zawiera kompilacje JIT i transfer, wiec mediana liczona jest bez niej.
     Speedup = T_seq / T_cuda (wartosc < 1 oznacza, ze GPU jest wolniejsze).
+    Przenosi metadane sprzetowe (GPU, CPU, wersje Numba/CUDA, data) z plikow historii.
     """
     seq_t = [float(t) for t in seq_hist["epoch_times"]]
     cuda_t = [float(t) for t in cuda_hist["epoch_times"]]
     seq_med = float(np.median(seq_t[1:] if len(seq_t) > 1 else seq_t))
     cuda_med = float(np.median(cuda_t[1:] if len(cuda_t) > 1 else cuda_t))
+
+    raw_meta = cuda_hist.get("metadata") or seq_hist.get("metadata") or {}
+    metadata = {
+        "timestamp": raw_meta.get("timestamp") or raw_meta.get("date") or "unknown",
+        "environment": raw_meta.get("environment") or raw_meta.get("system") or "unknown",
+        "gpu_model": raw_meta.get("gpu_model"),
+        "nvidia_driver": raw_meta.get("nvidia_driver"),
+        "cuda_version": raw_meta.get("cuda_version"),
+        "cpu": raw_meta.get("cpu"),
+        "cpu_count_logical": raw_meta.get("cpu_count_logical"),
+        "python_version": raw_meta.get("python_version"),
+        "numpy_version": raw_meta.get("numpy_version"),
+        "numba_version": raw_meta.get("numba_version"),
+        "dataset": raw_meta.get("dataset"),
+        "note": raw_meta.get(
+            "note",
+            "Wyniki seq i cuda pochodza z tej samej maszyny (Colab) i nie sa bezposrednio porownywalne czasowo z pomiarami CPU z Apple Silicon.",
+        ),
+    }
+
     return {
+        "metadata": metadata,
         "epochs_seq": len(seq_t),
         "epochs_cuda": len(cuda_t),
         "seq_median_epoch_time": seq_med,
@@ -372,7 +394,8 @@ def plot_cuda_comparison(
     ax2.grid(True, linestyle="--", alpha=0.5)
     ax2.legend(fontsize=10)
 
-    plt.suptitle("CUDA vs wersja sekwencyjna (zbiór CS:GO, to samo środowisko)", fontsize=12)
+    gpu_name = summary.get("metadata", {}).get("gpu_model") or "GPU"
+    plt.suptitle(f"CUDA ({gpu_name}) vs wersja sekwencyjna (zbiór CS:GO, to samo środowisko Google Colab)", fontsize=12)
     plt.tight_layout()
     plt.savefig(output_path, bbox_inches="tight")
     plt.close()

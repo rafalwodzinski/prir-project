@@ -18,6 +18,7 @@ from scripts.plot_results import (
     plot_batch_and_k_analysis,
     plot_execution_time_comparison,
     plot_data_size_scaling,
+    summarize_cuda_vs_seq,
 )
 
 
@@ -223,3 +224,28 @@ def test_sequential_baseline_and_speedup_vs_seq(tmp_path: Path):
     plot_execution_time_comparison(report, output_path=out_time)
     assert out_se.is_file() and out_se.stat().st_size > 1000
     assert out_time.is_file() and out_time.stat().st_size > 1000
+
+
+def test_cuda_summary_preserves_environment_metadata():
+    """
+    Sprawdza, czy summarize_cuda_vs_seq przenosi metadane sprzetowe (GPU, CPU,
+    wersje Numba/CUDA, data) z plikow historii do podsumowania cuda_results.json.
+    """
+    meta = {
+        "timestamp": "2026-11-04 14:27:00",
+        "environment": "Google Colab (NVIDIA T4 GPU runtime)",
+        "gpu_model": "NVIDIA Tesla T4",
+        "cuda_version": "12.4",
+        "cpu": "Intel Xeon",
+        "numba_version": "0.60.0",
+    }
+    seq_hist = {"epoch_times": [0.04, 0.042, 0.041], "accuracy": [0.73, 0.74, 0.75], "loss": [0.55, 0.50, 0.48], "metadata": meta}
+    cuda_hist = {"epoch_times": [1.40, 0.10, 0.105], "accuracy": [0.73, 0.74, 0.75], "loss": [0.55, 0.50, 0.48], "metadata": meta}
+
+    summary = summarize_cuda_vs_seq(seq_hist, cuda_hist)
+    assert "metadata" in summary
+    assert summary["metadata"]["gpu_model"] == "NVIDIA Tesla T4"
+    assert summary["metadata"]["cuda_version"] == "12.4"
+    assert summary["metadata"]["cpu"] == "Intel Xeon"
+    assert summary["metadata"]["numba_version"] == "0.60.0"
+    assert summary["metadata"]["timestamp"] == "2026-11-04 14:27:00"
