@@ -70,7 +70,7 @@ Głównym celem badawczym jest **ocena przyspieszenia $S(p)$ i efektywności $E(
 │   ├── batch_k_analysis.png      # Czas do jakości 74% Accuracy w funkcji Batch Size i parametru K
 │   ├── data_size_scaling.png     # Skalowanie względem rozmiaru danych (100k–5M próbek): Seq, Numba, MPI, CUDA
 │   └── cuda_comparison.png       # Porównanie czasów epok i zgodności Accuracy: CUDA vs Sequential (Colab T4)
-├── tests/                        # Zestaw 36 testów jednostkowych i integracyjnych
+├── tests/                        # Zestaw 39 testów jednostkowych i integracyjnych
 │   ├── conftest.py               # Automatyczna izolacja symulatora CUDASIM na macOS/laptopach bez NVIDIA
 │   ├── test_cli.py               # Testy argumentów CLI, serializacji modeli .npy/.npz i historii JSON
 │   ├── test_cuda.py              # Testy poprawności kerneli CUDA i zbieżności SGD na GPU
@@ -217,28 +217,74 @@ python src/cuda_sgd.py
 
 ---
 
-### Benchmarki wydajnościowe i generowanie wykresów
+### Benchmarki wydajnościowe i generowanie wykresów (odtworzenie wszystkich wyników)
 
-Projekt zawiera automatyczny potok badań wydajnościowych:
+Katalog `data/` jest ignorowany przez Git (`.gitignore`), dlatego osoba klonująca czyste repozytorium powinna wykonać poniższe kroki, aby odtworzyć komplet wyników z `reports/` i `figures/`.
 
+#### Krok 1. Pobranie i umieszczenie danych CS:GO
+1. Pobierz plik `csgo_round_snapshots.csv` ze zbioru **CS:GO Round Winner Classification** na Kaggle:
+   <https://www.kaggle.com/datasets/christianlillelund/csgo-round-winner-classification>
+2. Utwórz katalog `data/` w głównym folderze repozytorium i umieść w nim pobrany plik:
+   ```bash
+   mkdir -p data
+   # skopiuj plik tak, aby znajdowal sie pod sciezka:
+   # data/csgo_round_snapshots.csv
+   ```
+3. (Opcjonalnie) Zweryfikuj poprawność wczytywania, format `C_CONTIGUOUS` i balans klas:
+   ```bash
+   python scripts/verify_real_data.py
+   ```
+*(Jeśli plik CSV nie istnieje, wszystkie skrypty automatycznie przełączają się na deterministyczny generator danych syntetycznych.)*
+
+#### Krok 2. Uruchomienie benchmarków CPU lokalnie
 ```bash
-# 1. Uruchomienie pelnego zestawu testow wydajnosciowych (zapis do reports/benchmark_results.json)
+# Pełny zestaw benchmarków (Sequential T_seq, OpenMP/Numba, MPI, Batch x K do 74% Accuracy + skalowanie rozmiaru danych):
 python scripts/run_benchmarks.py
 
-# 2. Wygenerowanie wykresow naukowych (zapis do figures/*.png)
+# Alternatywnie: odświeżenie tylko benchmarków CPU na CS:GO z zachowaniem istniejących wyników CUDA z Colaba w data_size_scaling:
+python scripts/run_benchmarks.py --skip-data-scaling
+
+# Wygenerowanie wszystkich wykresów PNG do katalogu figures/ oraz podsumowania reports/cuda_results.json:
 python scripts/plot_results.py
 ```
 
-Wygenerowane wykresy trafiają do katalogu `figures/`:
-* `figures/speedup_efficiency.png` – krzywe przyspieszenia i efektywności względem Prawa Amdahla.
-* `figures/scaling_comparison.png` – czasy wykonania w zależności od liczby rdzeni/procesów.
-* `figures/batch_k_analysis.png` – analiza wrażliwości metryki *Time-to-Quality* na wielkość partii i parametr $K$.
+#### Krok 3. Odtworzenie wyników GPU CUDA w Google Colab (Runtime → T4 GPU)
+Na komputerach bez fizycznej karty NVIDIA (np. macOS Apple Silicon) wyniki CUDA odtwarza się w Google Colab:
+
+```bash
+# 1. Klonowanie repozytorium i instalacja zależności (w komórce notatnika Colab z aktywnym GPU T4)
+!git clone https://github.com/rafalwodzinski/prir-project.git
+%cd prir-project
+!pip install -q numba pandas scikit-learn mpi4py
+
+# 2. Wgranie pliku CS:GO do data/csgo_round_snapshots.csv (przez panel Files lub google.colab.files.upload())
+!mkdir -p data
+
+# 3a. Porównanie 20 epok CUDA vs Sequential na zbiorze CS:GO (batch=512, lr=0.003)
+!python src/main.py --mode seq  --epochs 20 --batch-size 512 --lr 0.003 --save-history reports/colab_seq_history.json
+!python src/main.py --mode cuda --epochs 20 --batch-size 512 --lr 0.003 --save-history reports/colab_cuda_history.json
+
+# 3b. Skalowanie rozmiaru danych (100k, 500k, 1M, 5M próbek × 101 cech, batch=4096)
+!python scripts/run_benchmarks.py --only-data-scaling --batch-size 4096
+
+# 4. Wygenerowanie wykresów i podsumowania CUDA
+!python scripts/plot_results.py
+```
+
+Następnie pobierz z Colaba pliki `reports/colab_seq_history.json`, `reports/colab_cuda_history.json` oraz `reports/benchmark_results.json` do lokalnego katalogu `reports/` i uruchom ponownie `python scripts/plot_results.py`.
+
+#### Lista generowanych wykresów (`figures/`)
+* `figures/speedup_efficiency.png` – krzywe przyspieszenia $S(p)$ i efektywności $E(p)$ (względem `T_seq` oraz $T_1$) wraz z dopasowaniem Prawa Amdahla w zakresie $f \in [0\%, 99\%]$.
+* `figures/scaling_comparison.png` – bezwzględne czasy wykonania treningu $T(p)$ (jednolity zakres: suma `epoch_times` po rozgrzewce JIT) vs linia odniesienia `T_seq`.
+* `figures/batch_k_analysis.png` – analiza wrażliwości metryki *Time-to-Quality* (**próg 74% Accuracy**, wynikający z sufitu regresji logistycznej ~75% na CS:GO) w funkcji wielkości partii i parametru $K$ (z raportowaniem `Train Acc` i `Test Acc`).
+* `figures/data_size_scaling.png` – czas epoki (skala log-log) i przyspieszenie względem `Sequential` dla rozmiarów 100k, 500k, 1M i 5M próbek (`Sequential`, `Numba`, `MPI`, `CUDA`).
+* `figures/cuda_comparison.png` – porównanie czasów pojedynczej epoki i zgodności krzywych Accuracy dla wariantu `CUDA` vs `Sequential` na CS:GO (Google Colab T4).
 
 ---
 
 ### Uruchamianie testów jednostkowych (pytest)
 
-Zestaw 33 testów jednostkowych i integracyjnych weryfikuje wszystkie aspekty projektu:
+Zestaw 39 testów jednostkowych i integracyjnych weryfikuje wszystkie aspekty projektu:
 
 ```bash
 # Uruchomienie wszystkich testow
@@ -258,7 +304,8 @@ pytest tests/test_cli.py -v
 
 ## Zbiór danych i stabilność numeryczna
 
-* **Dane:** Domyślnie wykorzystywany jest zbiór *CS:GO Round Snapshots* (`data/csgo_round_snapshots.csv`), zawierający 122 410 rund meczowych i 104 cechy (po zakodowaniu One-Hot zmiennych kategorycznych map oraz binarnej zmiennej `bomb_planted`).
+* **Dane:** Domyślnie wykorzystywany jest zbiór *CS:GO Round Snapshots* (`data/csgo_round_snapshots.csv`, źródło: [Kaggle – CS:GO Round Winner Classification](https://www.kaggle.com/datasets/christianlillelund/csgo-round-winner-classification)), zawierający 122 410 rund meczowych i 104 cechy (po zakodowaniu One-Hot zmiennych kategorycznych map oraz binarnej zmiennej `bomb_planted`). Katalog `data/` nie jest śledzony w Git.
+* **Próg dokładności (74% Accuracy):** Binarna regresja logistyczna jako klasyfikator liniowy osiąga na zbiorze CS:GO naturalny sufit ok. **75% Accuracy** (zarówno na zbiorze treningowym, jak i testowym), dlatego w badaniu *Time-to-Quality* (`batch_k_analysis.png`) przyjęto próg **74% Accuracy**.
 * **Fallback syntetyczny:** Jeśli plik CSV nie znajduje się na dysku, skrypty automatycznie generują deterministyczny zbiór syntetyczny (`generate_synthetic_dataset`), co pozwala na natychmiastowe uruchomienie projektu w dowolnym środowisku.
 * **Brak wycieku danych (Data Leakage):** Zgodnie ze specyfikacją zadania, skalowanie cech (`StandardScaler`) dopasowywane jest **wyłącznie na zbiorze treningowym** (`fit_transform` na train, tylko `transform` na test/val).
 * **Stabilność numeryczna:**
