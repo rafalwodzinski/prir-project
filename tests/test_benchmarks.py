@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from scripts.run_benchmarks import (
+    benchmark_batch_and_k_sensitivity,
     benchmark_data_size_scaling,
     benchmark_openmp_numba,
     benchmark_sequential_baseline,
@@ -273,3 +274,42 @@ def test_cuda_summary_preserves_environment_metadata():
     assert summary["metadata"]["cpu"] == "Intel Xeon"
     assert summary["metadata"]["numba_version"] == "0.60.0"
     assert summary["metadata"]["timestamp"] == "2026-11-04 14:27:00"
+
+
+def test_batch_k_sensitivity_reports_test_accuracy(tmp_path: Path):
+    """
+    Sprawdza, ze benchmark_batch_and_k_sensitivity po przekazaniu zbioru testowego
+    zapisuje test_accuracy oraz ze wykres plot_batch_and_k_analysis renderuje sie poprawnie.
+    """
+    rng = np.random.default_rng(42)
+    X_tr = rng.standard_normal((300, 6), dtype=np.float32)
+    w_true = np.array([1.5, -1.0, 0.5, 0.0, 0.0, 0.0], dtype=np.float32)
+    y_tr = (X_tr @ w_true > 0).astype(np.float32)
+    X_te = rng.standard_normal((100, 6), dtype=np.float32)
+    y_te = (X_te @ w_true > 0).astype(np.float32)
+
+    res = benchmark_batch_and_k_sensitivity(
+        X_tr,
+        y_tr,
+        X_test=X_te,
+        y_test=y_te,
+        batch_sizes=[64],
+        k_values=[1, 4],
+        target_accuracy=0.74,
+        max_epochs=5,
+        n_workers=2,
+        learning_rate=0.1,
+        seed=42,
+    )
+    assert len(res["grid_results"]) == 2
+    for row in res["grid_results"]:
+        assert "accuracy" in row
+        assert "test_accuracy" in row
+        assert 0.0 <= row["test_accuracy"] <= 1.0
+
+    out_png = tmp_path / "batch_k_test_acc.png"
+    plot_batch_and_k_analysis(
+        {"metadata": {"seed": 42, "hardware": {"processor": "Test"}}, "batch_k_sensitivity": res},
+        output_path=out_png,
+    )
+    assert out_png.is_file() and out_png.stat().st_size > 1000

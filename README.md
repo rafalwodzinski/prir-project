@@ -312,8 +312,8 @@ Wszystkie warianty CPU (`Sequential`, `OpenMP / Numba`, `MPI`) w `scripts/run_be
 * **Ograniczenie Prawa Amdahla:** dopasowanie krzywej $S(p) = \frac{1}{(1 - f) + f/p}$ w pełnym zakresie $f \in [0\%, 99\%]$ daje bardzo niski efektywny ułamek równoległy (rzędu kilku–kilkunastu procent dla Numby względem $T_1$, lub dolną granicę `0%` przy ujemnym skalowaniu). Klasyczny model Amdahla zakłada zerowy koszt synchronizacji ($S(p) \ge 1$), więc nie modeluje spadku wydajności poniżej `1.0x` wynikającego z narzutu barier wątkowych i komunikacji dla małych partii.
 
 ### 2. Kompromis w Local SGD (Parametr K i rozmiar partii)
-* Na CS:GO regresja logistyczna osiąga sufit ~75% Accuracy, dlatego w eksperymencie czułości zbadano czas do osiągnięcia **74% Accuracy** (`lr=0.003`).
-* Najkrótszy czas daje `batch=128, K=16` (~26.3 ms, 1 epoka); większe wartości $K$ redukują koszt uśredniania wag o kilka–kilkanaście procent przy zachowaniu praktycznie identycznej dokładności.
+* Na CS:GO regresja logistyczna osiąga liniowy sufit ~75% Accuracy, dlatego w eksperymencie czułości zbadano czas do osiągnięcia **74% Accuracy** (`lr=0.003`, ewaluacja na train `97 928` oraz test `24 482` próbek).
+* Najkrótszy czas daje `batch=128, K=16` (~28.4 ms, 1 epoka); we wszystkich 20 konfiguracjach dokładność na zbiorze testowym pokrywa się z treningową (**Train Acc: 74.09–74.56%**, **Test Acc: 74.22–74.64%**), co potwierdza brak przeuczenia. Większe wartości $K$ redukują koszt uśredniania wag o kilka–kilkanaście procent przy zachowaniu identycznej jakości generalizacji.
 
 ### 3. Akceleracja GPU CUDA i skalowanie rozmiaru danych
 * Na małym zbiorze CS:GO (`batch=512`, `cuda_comparison.png`) GPU osiąga identyczną dokładność i stratę co CPU (`75.13%`, Loss `0.4839`), ale jest wolniejsze (`0.40x`) przez narzut uruchamiania małych kerneli.

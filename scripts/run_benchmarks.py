@@ -413,6 +413,8 @@ def benchmark_mpi_scaling(
 def benchmark_batch_and_k_sensitivity(
     X_train: np.ndarray,
     y_train: np.ndarray,
+    X_test: np.ndarray | None = None,
+    y_test: np.ndarray | None = None,
     batch_sizes: list[int] | None = None,
     k_values: list[int] | None = None,
     target_accuracy: float = 0.74,
@@ -424,7 +426,8 @@ def benchmark_batch_and_k_sensitivity(
     """
     Eksperyment: Wplyw wielkosci partii (batch size) i wspolczynnika synchronizacji K
     na 'Czas do 74% Accuracy' (lub innej zadanej dokladnosci).
-    Dane: zbior treningowy CS:GO (dokladnosc liczona na zbiorze treningowym, tak jak w history['accuracy']).
+    Prog 74% wynika z liniowego sufitu regresji logistycznej na CS:GO (~75% Accuracy).
+    Gdy podano (X_test, y_test), po osiagnieciu progu wyznaczana jest rowniez dokladnosc testowa (test_accuracy).
     Jesli prog nie zostanie osiagniety, trening konczy sie po max_epochs (target_reached=False).
     """
     if batch_sizes is None:
@@ -441,7 +444,7 @@ def benchmark_batch_and_k_sensitivity(
     for bs in batch_sizes:
         for k in k_values:
             # Powtarzamy pomiary z rozgrzewka i mediana
-            def train_and_track_time() -> tuple[float, int, float]:
+            def train_and_track_time() -> tuple[float, int, float, float | None]:
                 rng = np.random.default_rng(seed)
                 worker_weights = [np.zeros(n_features, dtype=X_train.dtype) for _ in range(n_workers)]
                 step_counter = 0
@@ -475,7 +478,14 @@ def benchmark_batch_and_k_sensitivity(
                         break
 
                 total_time = time.perf_counter() - t_start
-                return total_time, reached_epoch, final_acc
+
+                # Ewaluacja na zbiorze testowym poza pomiarem czasu treningu
+                test_acc: float | None = None
+                if X_test is not None and y_test is not None:
+                    test_probs = predict_proba(X_test, worker_weights[0])
+                    test_acc = compute_accuracy(y_test, test_probs)
+
+                return total_time, reached_epoch, final_acc, test_acc
 
             # Rozgrzewka
             train_and_track_time()
@@ -484,30 +494,39 @@ def benchmark_batch_and_k_sensitivity(
             times: list[float] = []
             epochs_needed: list[int] = []
             accs: list[float] = []
+            test_accs: list[float] = []
             for _ in range(5):
-                t_elapsed, ep, acc = train_and_track_time()
+                t_elapsed, ep, acc, t_acc = train_and_track_time()
                 times.append(t_elapsed)
                 epochs_needed.append(ep)
                 accs.append(acc)
+                if t_acc is not None:
+                    test_accs.append(t_acc)
 
             med_time = float(np.median(times))
             med_epoch = int(np.median(epochs_needed))
             best_acc = float(np.mean(accs))
+            mean_test_acc = float(np.mean(test_accs)) if test_accs else None
 
+            test_str = f" | Test Acc: {mean_test_acc * 100:.2f}%" if mean_test_acc is not None else ""
             print(
                 f"Batch={bs:3d}, K={k:2d} -> "
-                f"Czas: {med_time:.4f}s | Epoki: {med_epoch:2d} | Acc: {best_acc * 100:.2f}%"
+                f"Czas: {med_time:.4f}s | Epoki: {med_epoch:2d} | Train Acc: {best_acc * 100:.2f}%{test_str}"
             )
 
-            grid_results.append({
+            entry: dict[str, Any] = {
                 "batch_size": bs,
                 "sync_k": k,
                 "median_time": med_time,
                 "samples_time": times,
                 "median_epochs": med_epoch,
                 "accuracy": best_acc,
+                "train_accuracy": best_acc,
                 "target_reached": best_acc >= target_accuracy,
-            })
+            }
+            if mean_test_acc is not None:
+                entry["test_accuracy"] = mean_test_acc
+            grid_results.append(entry)
 
     return {
         "execution_mode": "simulated_workers",
@@ -515,7 +534,8 @@ def benchmark_batch_and_k_sensitivity(
         "note": (
             "Symulacja wieloprocesowego Local SGD w jednym procesie "
             "(wspolna logika run_local_sgd_epoch_simulated z src/model_mpi.py) – "
-            "mierzy matematyczny wplyw Batch Size i K bez narzutu startu mpiexec."
+            "mierzy matematyczny wplyw Batch Size i K bez narzutu startu mpiexec. "
+            "Prog 74% Accuracy wynika z liniowego sufitu regresji logistycznej na CS:GO (~75%)."
         ),
         "target_accuracy": target_accuracy,
         "batch_sizes": batch_sizes,
@@ -763,7 +783,7 @@ def run_full_benchmark_suite(
         print("Brak pliku CSV CS:GO, uzywam zbioru syntetycznego.")
         dataset_name = "Synthetic Dataset"
 
-    X_scale, _, y_scale, _ = prepare_dataset(
+    X_scale, X_scale_test, y_scale, y_scale_test = prepare_dataset(
         csgo_path,
         test_size=0.2,
         seed=seed,
@@ -771,7 +791,7 @@ def run_full_benchmark_suite(
         fallback=lambda: generate_synthetic_dataset(n_samples=20000, n_features=30, seed=seed, dtype=np.float32),
     )
 
-    print(f"Dane do eksperymentow: {X_scale.shape[0]} probek, {X_scale.shape[1]} cech")
+    print(f"Dane do eksperymentow: train={X_scale.shape[0]}, test={X_scale_test.shape[0]}, cech={X_scale.shape[1]}")
 
     # 0. Benchmark Sequential Baseline (NumPy 1T) - punkt odniesienia T_seq
     seq_data = benchmark_sequential_baseline(
@@ -806,10 +826,12 @@ def run_full_benchmark_suite(
         baseline_seq_time=t_seq,
     )
 
-    # 3. Analiza Batch Size i parametru K na czas osiagniecia 74% accuracy (dane CS:GO)
+    # 3. Analiza Batch Size i parametru K na czas osiagniecia 74% accuracy (dane CS:GO, ewaluacja train + test)
     batch_k_data = benchmark_batch_and_k_sensitivity(
         X_scale,
         y_scale,
+        X_test=X_scale_test,
+        y_test=y_scale_test,
         batch_sizes=[64, 128, 256, 512],
         k_values=[1, 2, 4, 8, 16],
         target_accuracy=0.74,
