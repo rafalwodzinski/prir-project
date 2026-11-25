@@ -2,7 +2,12 @@ import numpy as np
 import pytest
 
 from sequential_sgd import add_intercept, generate_synthetic_dataset
-from model_mpi import train_local_sgd_mpi, MPI
+from model_mpi import (
+    MPI,
+    local_sgd_step,
+    run_local_sgd_epoch_simulated,
+    train_local_sgd_mpi,
+)
 
 
 def test_local_sgd_convergence():
@@ -83,3 +88,43 @@ def test_weight_averaging_math():
     avg_w = global_sum / size
 
     assert np.allclose(avg_w, [2.0, 4.0, 6.0])
+
+
+def test_local_sgd_step_and_simulated_epoch_match_mpi():
+    """
+    Sprawdza, ze wydzielone prymitywy (local_sgd_step i run_local_sgd_epoch_simulated)
+    obsluguja pusty batch oraz dla 1 workera daja identyczne wagi i liczbe synchronizacji
+    co train_local_sgd_mpi (1 proces).
+    """
+    X, y = generate_synthetic_dataset(n_samples=256, n_features=6, seed=42, dtype=np.float32)
+    X_b = add_intercept(X)
+
+    # Pusty batch nie zmienia wag
+    w0 = np.ones(X_b.shape[1], dtype=np.float32)
+    w_empty = local_sgd_step(X_b[:0], y[:0], w0, learning_rate=0.05)
+    assert np.array_equal(w_empty, w0)
+
+    # Porownanie 1-procesowego train_local_sgd_mpi z run_local_sgd_epoch_simulated (1 worker)
+    w_mpi, h_mpi = train_local_sgd_mpi(
+        X_b, y, epochs=3, batch_size=64, learning_rate=0.05, sync_freq_k=4, seed=77, verbose=False
+    )
+
+    rng = np.random.default_rng(77)
+    worker_weights = [np.zeros(X_b.shape[1], dtype=np.float32)]
+    step_counter = 0
+    total_syncs = 0
+    for _ in range(3):
+        idx = rng.permutation(X_b.shape[0])
+        step_counter, syncs = run_local_sgd_epoch_simulated(
+            np.ascontiguousarray(X_b[idx]),
+            np.ascontiguousarray(y[idx]),
+            worker_weights,
+            batch_size=64,
+            learning_rate=0.05,
+            sync_freq_k=4,
+            step_counter=step_counter,
+        )
+        total_syncs += syncs
+
+    assert total_syncs == h_mpi["sync_count"]
+    assert np.allclose(worker_weights[0], w_mpi, atol=1e-6)

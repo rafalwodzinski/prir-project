@@ -518,7 +518,10 @@
         "accuracy": 0.7413201535822237,
         "target_reached": true
       }
-    ]
+    ],
+    "execution_mode": "simulated_workers",
+    "n_workers": 4,
+    "note": "Symulacja wieloprocesowego Local SGD w jednym procesie (wspolna logika run_local_sgd_epoch_simulated z src/model_mpi.py) – mierzy matematyczny wplyw Batch Size i K bez narzutu startu mpiexec."
   },
   "data_size_scaling": {
     "sample_sizes": [
